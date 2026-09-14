@@ -221,17 +221,20 @@ log_step "[2/4] Building source archive..."
 ARCHIVE_PATH="/tmp/${PROJECT_NAME}-${VERSION}.tar.gz"
 remote_env="/tmp/${PROJECT_NAME}-${VERSION}.env"
 
-# Create archive (exclude bulky files)
+# Create archive (exclude bulky/dev-only files -- keep this list matched
+# with the .gitignore-style clutter that tends to accumulate in the repo
+# root: caches, local tool state, stray installs, etc.)
+TAR_EXCLUDES=(
+    --exclude='.git' --exclude='.pytest_cache' --exclude='__pycache__'
+    --exclude='.venv' --exclude='venv' --exclude='*.pyc'
+    --exclude='*.log' --exclude='logs' --exclude='.env'
+    --exclude='.mypy_cache' --exclude='.claude' --exclude='build'
+    --exclude='node_modules' --exclude='routes'
+)
 if command -v pigz &>/dev/null; then
-    tar --exclude='.git' --exclude='.pytest_cache' --exclude='__pycache__' \
-        --exclude='.venv' --exclude='venv' --exclude='*.pyc' \
-        --exclude='*.log' --exclude='logs' --exclude='.env' \
-        -I pigz -cf "$ARCHIVE_PATH" -C "$SCRIPT_DIR" .
+    tar "${TAR_EXCLUDES[@]}" -I pigz -cf "$ARCHIVE_PATH" -C "$SCRIPT_DIR" .
 else
-    tar --exclude='.git' --exclude='.pytest_cache' --exclude='__pycache__' \
-        --exclude='.venv' --exclude='venv' --exclude='*.pyc' \
-        --exclude='*.log' --exclude='logs' --exclude='.env' \
-        -czf "$ARCHIVE_PATH" -C "$SCRIPT_DIR" .
+    tar "${TAR_EXCLUDES[@]}" -czf "$ARCHIVE_PATH" -C "$SCRIPT_DIR" .
 fi
 
 log_ok "Archive: $ARCHIVE_PATH ($(du -h "$ARCHIVE_PATH" | cut -f1))"
