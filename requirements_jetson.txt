@@ -1,8 +1,5 @@
 numpy>=1.24
 opencv-python-headless>=4.8
 python-dotenv>=1.0
-# Jetson.GPIO — only works on Jetson hardware (L4T kernel).
-# Install manually if on actual Jetson Nano/Orin:
-Jetson.GPIO
-# On non-Jetson ARM64: skip this, drivers will stub out gracefully.
+paho-mqtt>=2.1.0
 debugpy>=1.8

@@ -1,11 +1,13 @@
-# Jetson Nano self-calibration stack — direct GPIO, no MQTT/ESP.
+# Raspberry Pi 5 vision stack — lane detection only, no GPIO.
+# Publishes steering + drive state over MQTT (car/raspi5/control) to the
+# Pi4 DataProcessingCenter, which drives the ESP32 over UART.
 #
 # Start:
 #   cp .env.jetson .env
 #   docker compose -f docker-compose.jetson.yml up -d
 #
 # Dashboard:
-#   http://<jetson-ip>:8080
+#   http://<pi5-ip>:8080
 
 version: "3.8"
 
@@ -20,15 +22,11 @@ services:
     container_name: car-calib-jetson
     restart: unless-stopped
     network_mode: host
-    privileged: true
     devices:
       - /dev/video0:/dev/video0
       - /dev/video1:/dev/video1
       - /dev/video2:/dev/video2
     volumes:
-      - /sys/class/gpio:/sys/class/gpio
-      - /sys/devices:/sys/devices
-      - /dev/mem:/dev/mem
       - ./logs:/data/logs
       - ./routes:/data/routes
     pids_limit: 128
@@ -49,25 +47,16 @@ services:
       - MAIN_TERMINAL_LOG=${MAIN_TERMINAL_LOG:-true}
       - MAIN_DEBUG_MODE=${MAIN_DEBUG_MODE:-true}
       - MAIN_SHOW_DETECTOR_DEBUG=${MAIN_SHOW_DETECTOR_DEBUG:-true}
-      # Servo
-      - SERVO_PIN=${SERVO_PIN:-33}
-      - SERVO_CENTER_ANGLE=${SERVO_CENTER_ANGLE:--35}
+      # Steering (mapped to 0-180 logical angle, no GPIO on Pi5 anymore)
+      - SERVO_CENTER_ANGLE=${SERVO_CENTER_ANGLE:--8}
       - MAX_STEERING_OFFSET=${MAX_STEERING_OFFSET:-60}
-      - DRIVER_SERVO_ANGLE_MIN=${DRIVER_SERVO_ANGLE_MIN:--90}
-      - DRIVER_SERVO_ANGLE_MAX=${DRIVER_SERVO_ANGLE_MAX:-90}
-      - DRIVER_SERVO_PULSE_MIN_US=${DRIVER_SERVO_PULSE_MIN_US:-1000}
-      - DRIVER_SERVO_PULSE_MAX_US=${DRIVER_SERVO_PULSE_MAX_US:-2000}
-      # Base motor
-      - BASE_BIT2_PIN=${BASE_BIT2_PIN:-15}
-      - BASE_BIT1_PIN=${BASE_BIT1_PIN:-13}
-      - BASE_BIT0_PIN=${BASE_BIT0_PIN:-11}
-      # Relay + power
-      - RELAY_PIN=${RELAY_PIN:-18}
-      - POWER_PIN=${POWER_PIN:-16}
-      - RELAY_ACTIVE_LOW=${RELAY_ACTIVE_LOW:-true}
-      - POWER_RELAY_ACTIVE_LOW=${POWER_RELAY_ACTIVE_LOW:-true}
-      - POWER_ON_PULSE_MS=${POWER_ON_PULSE_MS:-100}
-      - POWER_OFF_PULSE_MS=${POWER_OFF_PULSE_MS:-3000}
+      # MQTT (Pi5 -> Pi4 DataProcessingCenter)
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:?Set MQTT_BROKER_HOST to the Pi4/broker address}
+      - MQTT_BROKER_PORT=${MQTT_BROKER_PORT:-1883}
+      - MQTT_USERNAME=${MQTT_USERNAME:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      - MQTT_RASPI5_CONTROL_TOPIC=${MQTT_RASPI5_CONTROL_TOPIC:-car/raspi5/control}
+      - MANUAL_OVERRIDE_ENABLED=${MANUAL_OVERRIDE_ENABLED:-true}
       # Vision
       - ROI_HEIGHT_PCT=${ROI_HEIGHT_PCT:-0.6}
       - VISION_CANNY_LOW=${VISION_CANNY_LOW:-50}

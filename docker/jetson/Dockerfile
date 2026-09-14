@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1.7
-# Jetson / ARM64 — self-calibration + direct GPIO
+# Raspberry Pi 5 / ARM64 — vision-only, publishes steering over MQTT
 #
-# Uses arm64v8/ubuntu (no registry auth, works everywhere).
-# Jetson.GPIO installs via pip (needs actual Jetson kernel).
-# OpenCV via pip, not apt → no GPU but works.
+# No GPIO here anymore: Pi5 runs the vision loop and publishes to the Pi4
+# DataProcessingCenter over MQTT (car/raspi5/control). Uses arm64v8/ubuntu
+# (no registry auth, works everywhere). OpenCV via pip, not apt → no GPU
+# but works.
 #
 # Build:
 #   DOCKER_BUILDKIT=1 docker build -f docker/jetson/Dockerfile -t car-calib-jetson .

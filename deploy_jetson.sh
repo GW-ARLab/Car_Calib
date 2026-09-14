@@ -29,9 +29,9 @@ Options:
   --env <path>  Use custom env file (default: .env)
 
 Setup:
-  1. Copy .env.jetson → .env and adjust GPIO pins for your wiring
+  1. Copy .env.jetson → .env and set MQTT_BROKER_HOST to the Pi4/broker
   2. Run ./deploy_jetson.sh
-  3. Dashboard: http://<jetson-ip>:8080
+  3. Dashboard: http://<pi5-ip>:8080
 EOF
 }
 
@@ -95,11 +95,11 @@ fi
 # .env
 if [[ ! -f "$ENV_FILE" ]]; then
     echo -e "${YELLOW}No .env found at $ENV_FILE${NC}"
-    echo -e "${YELLOW}Copying .env.jetson → .env (review and adjust GPIO pins!)${NC}"
+    echo -e "${YELLOW}Copying .env.jetson → .env (review before deploying!)${NC}"
     cp .env.jetson "$ENV_FILE"
     echo ""
     echo -e "${YELLOW}Review $ENV_FILE and re-run.${NC}"
-    echo -e "${YELLOW}Key pins to verify: SERVO_PIN, BASE_BIT2/1/0, RELAY_PIN, POWER_PIN${NC}"
+    echo -e "${YELLOW}Key vars to verify: MQTT_BROKER_HOST, DASHBOARD_TOKEN${NC}"
     exit 0
 fi
 
