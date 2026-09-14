@@ -22,10 +22,13 @@ services:
     container_name: car-calib-pi5
     restart: unless-stopped
     network_mode: host
+    # Docker refuses to start the container if ANY listed device path is
+    # missing on the host -- only list /dev/videoN nodes that actually
+    # exist (`ls /dev/video*` on the Pi5). main_pi5.py's acquire_camera()
+    # scans indices at runtime, but only devices mapped in here are even
+    # visible inside the container.
     devices:
       - /dev/video0:/dev/video0
-      - /dev/video1:/dev/video1
-      - /dev/video2:/dev/video2
     volumes:
       - ./logs:/data/logs
       - ./routes:/data/routes
