@@ -8,11 +8,17 @@ Payload format on MQTT_RASPI5_CONTROL_TOPIC matches what the Pi4 side
 (`DataProcessingCenter._process_raspi5_control`) expects: "<angle>,<drive_code>"
 e.g. "105,1" -> angle=105, drive_code=1 (forward).
 
-NOTE: DRIVE_CODE_MAP below is a placeholder mapping from this repo's base
-command vocabulary (STOP/FORWARD/BACKWARD/...) to integer drive codes. The
-Pi4/ESP32 firmware is the source of truth for what each integer means --
-confirm/align this table with that firmware before relying on anything
-beyond STOP=0 / FORWARD=1.
+NOTE on drive_code: per hex_protocol.py (the 16-char HEX-ASCII frame sent to
+ESP32), a packet only carries {cmd_type, drive_code, servo_angle, flags} --
+there is no per-direction command. Steering (left/right) is expressed
+entirely through servo_angle, not drive_code. Only drive_code=0 (STOP) and
+1 (FORWARD) are confirmed by the Pi4 reference implementation; BACKWARD is
+an unconfirmed guess (2) since DataProcessingCenter never sets the `flags`
+byte's "rev" bit (0x01) when forwarding drive_code, so a firmware built
+around that flag would never see it via this path. This repo's legacy
+tri-state base commands (TURN_LEFT/TURN_RIGHT/LOCK/UNLOCK) have no ESP32
+equivalent at all and are mapped to STOP with a warning rather than
+inventing codes the firmware likely doesn't recognize.
 """
 
 from __future__ import annotations
@@ -39,17 +45,15 @@ try:
 except ImportError:  # pragma: no cover
     mqtt = None
 
-# Placeholder -- confirm against Pi4/ESP32 firmware before depending on
-# anything other than STOP=0 / FORWARD=1.
+# Confirmed against the Pi4 reference implementation: STOP=0, FORWARD=1.
+# BACKWARD=2 is an unconfirmed guess. Commands with no ESP32 equivalent
+# (steering is done via servo_angle, not drive_code) fall back to STOP.
 DRIVE_CODE_MAP: dict[str, int] = {
     "STOP": 0,
     "FORWARD": 1,
-    "BACKWARD": 2,
-    "TURN_LEFT": 3,
-    "TURN_RIGHT": 4,
-    "LOCK": 5,
-    "UNLOCK": 6,
+    "BACKWARD": 2,  # unconfirmed -- verify against ESP32 firmware
 }
+_NO_EQUIVALENT_COMMANDS = {"TURN_LEFT", "TURN_RIGHT", "LOCK", "UNLOCK"}
 
 
 class Raspi5MqttPublisher:
@@ -111,7 +115,10 @@ class Raspi5MqttPublisher:
         """Publish steering + drive state as "<angle>,<drive_code>"."""
         if self._client is None or not self._connected:
             return
-        drive_code = DRIVE_CODE_MAP.get(base_command.upper(), 0)
+        cmd = base_command.upper()
+        if cmd in _NO_EQUIVALENT_COMMANDS:
+            logger.warning("base command %s has no ESP32 drive_code equivalent, sending STOP", cmd)
+        drive_code = DRIVE_CODE_MAP.get(cmd, 0)
         angle_int = max(0, min(180, int(round(servo_angle_0_180))))
         try:
             self._client.publish(MQTT_RASPI5_CONTROL_TOPIC, payload=f"{angle_int},{drive_code}")
