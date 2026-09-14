@@ -204,9 +204,11 @@ fi
 # Step 1: Check SSH
 # --------------------------------------------------------------------------- #
 log_step "[1/4] Checking SSH connectivity..."
-if ! ssh_cmd "$PI5_PASSWORD" "${PI5_USER}@${PI5_HOST}" exit 2>/dev/null; then
-    log_err "Cannot SSH to ${PI5_USER}@${PI5_HOST}:${PI5_PORT}"
+if ! ssh_cmd "$PI5_PASSWORD" "${PI5_USER}@${PI5_HOST}" exit; then
+    log_err "Cannot SSH to ${PI5_USER}@${PI5_HOST}:${PI5_PORT} (see error above)"
     log_err "Check PI5_HOST, PI5_PASSWORD, or SSH key access."
+    log_err "If plink reported an uncached host key, accept it once with:"
+    log_err "  plink -ssh ${PI5_USER}@${PI5_HOST} -P ${PI5_PORT} exit"
     exit 1
 fi
 log_ok "SSH OK"
