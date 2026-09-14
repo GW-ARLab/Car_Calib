@@ -216,6 +216,11 @@ DRIVER_SERVO_MQTT_ENABLED = _get_bool("DRIVER_SERVO_MQTT_ENABLED", False)
 # Pi5 vision -> Pi4 DataProcessingCenter combined steering+drive topic.
 # Payload: "<angle 0-180>,<drive_code>" (see drivers/mqtt_control_publisher.py).
 MQTT_RASPI5_CONTROL_TOPIC = _get_str("MQTT_RASPI5_CONTROL_TOPIC", "car/raspi5/control")
+# DataProcessingCenter (Pi4) only acts on car/raspi5/control while its own
+# `_mode` is "camera" -- Pi5 publishes this retained on connect so a Pi4
+# left in "controller" mode from a prior session doesn't silently drop
+# every command from vision.
+MQTT_CONTROL_MODE_TOPIC = _get_str("MQTT_CONTROL_MODE_TOPIC", "car/control/mode")
 
 # --------------------------------------------------------------------------- #
 # Route logging / dataset acceptance

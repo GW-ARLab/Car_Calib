@@ -31,6 +31,7 @@ from config.settings import (
     MQTT_BROKER_HOST,
     MQTT_BROKER_PORT,
     MQTT_CLIENT_ID_PREFIX,
+    MQTT_CONTROL_MODE_TOPIC,
     MQTT_KEEPALIVE_S,
     MQTT_PASSWORD,
     MQTT_RASPI5_CONTROL_TOPIC,
@@ -101,6 +102,10 @@ class Raspi5MqttPublisher:
         self._connected = True
         client.publish("car/status/state", payload="online", retain=True)
         client.publish("car/status/device", payload="RPi5_Vision", retain=True)
+        # Force the Pi4 back into "camera" mode so it doesn't silently
+        # ignore car/raspi5/control if it was left in "controller" mode
+        # from a prior manual-control session.
+        client.publish(MQTT_CONTROL_MODE_TOPIC, payload="camera", retain=True)
         logger.info("Pi5 MQTT publisher connected to %s:%s", self.host, self.port)
 
     def _on_disconnect(self, client: Any, userdata: Any, *args: Any, **kwargs: Any) -> None:
