@@ -213,6 +213,10 @@ MQTT_STATUS_TOPIC = _get_str("MQTT_STATUS_TOPIC", "car/status")
 MQTT_CLIENT_ID_PREFIX = _get_str("MQTT_CLIENT_ID_PREFIX", "car-calib")
 DRIVER_SERVO_MQTT_ENABLED = _get_bool("DRIVER_SERVO_MQTT_ENABLED", False)
 
+# Pi5 vision -> Pi4 DataProcessingCenter combined steering+drive topic.
+# Payload: "<angle 0-180>,<drive_code>" (see drivers/mqtt_control_publisher.py).
+MQTT_RASPI5_CONTROL_TOPIC = _get_str("MQTT_RASPI5_CONTROL_TOPIC", "car/raspi5/control")
+
 # --------------------------------------------------------------------------- #
 # Route logging / dataset acceptance
 # --------------------------------------------------------------------------- #

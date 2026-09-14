@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Jetson Nano direct calibration + dashboard + base/relay control.
+"""Raspberry Pi 5 vision entrypoint: lane detection + dashboard, no GPIO.
 
-Same UnifiedCalibrator core, writes servo PWM directly via Jetson.GPIO.
-Plus embedded HTTP dashboard with MJPEG stream, telemetry, and controls.
+Same UnifiedCalibrator core as before, but Pi5 has no direct servo/base/relay
+hardware anymore -- steering + drive state are published over MQTT to the
+Pi4 DataProcessingCenter (car/raspi5/control), which drives the ESP32 over
+UART. Embedded HTTP dashboard (MJPEG stream, telemetry, route scripts,
+tuning) is unchanged.
 
 Usage:
     python3 main_jetson.py [--camera 0] [--hz 30] [--port 8080]
 
 Env vars:
-    SERVO_CENTER_ANGLE  (default: -35)
-    MAX_STEERING_OFFSET (default: 60)
-    SERVO_PIN           (default: 33)
-    BASE_BIT2_PIN       (default: 15)
-    BASE_BIT1_PIN       (default: 13)
-    BASE_BIT0_PIN       (default: 11)
-    RELAY_PIN           (default: 18)
-    POWER_PIN           (default: 16)
+    SERVO_CENTER_ANGLE       (default: -8)
+    MAX_STEERING_OFFSET      (default: 60)
+    MQTT_BROKER_HOST         (default: 127.0.0.1)
+    MQTT_BROKER_PORT         (default: 1883)
+    MQTT_RASPI5_CONTROL_TOPIC (default: car/raspi5/control)
 """
 
 from __future__ import annotations
@@ -43,22 +43,15 @@ from config.settings import (
     MAIN_TARGET_HZ,
     MAIN_CAMERA_INDEX,
 )
-from drivers.jetson_base import JetsonBaseDriver
-from drivers.jetson_relay import JetsonRelayDriver
-from drivers.jetson_servo import JetsonServoDriver
-from drivers.pigpio_base import PigpioBaseDriver
-from drivers.pigpio_relay import PigpioRelayDriver
-from drivers.pigpio_servo import PigpioServoDriver
+from drivers.mqtt_control_publisher import Raspi5MqttPublisher
 from models.robot_state import RobotState, FSMState
 from runtime.jetson_http import JetsonHttpServer
 from runtime.route_logging import RouteSession
 from runtime.jetson_script_runner import JetsonScriptRunner
 from runtime.calib_tuning import CalibTuneManager
 from runtime.manual_override import ManualOverrideController
-from runtime.object_detection import ObjectDetectionStatus, ObjectDetector, draw_object_boxes
 from runtime.dashboard_stream import DashboardStreamBroker
 from runtime.resource_limits import ScriptValidationError, StorageManager, validate_route_steps
-from runtime.ultrasonic_safety import SonarConfig, UltrasonicSafety
 from unified_calibration_components import UnifiedCalibrator, CalibrationProcessingError
 from runtime.sasc_experiment_log import SascExperimentLogger
 
@@ -93,10 +86,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--flip", action="store_true", default=False)
     p.add_argument("--port", type=int, default=int(os.getenv("DASHBOARD_PORT", "8080")))
     p.add_argument("--host", type=str, default=os.getenv("DASHBOARD_HOST", "0.0.0.0"))
-    hardware_default = os.getenv("CONTROL_HARDWARE", "jetson")
-    servo_pin_default = "12" if hardware_default == "pigpio" else "33"
-    p.add_argument("--hardware", choices=("jetson", "pigpio"), default=hardware_default)
-    p.add_argument("--servo-pin", type=int, default=int(os.getenv("SERVO_PIN", servo_pin_default)))
     p.add_argument("--no-dashboard", action="store_true", default=False)
     return p
 
@@ -245,60 +234,11 @@ def main() -> None:
     controller._max_offset = 90.0
 
     # ------------------------------------------------------------------ #
-    # Direct hardware drivers
+    # MQTT control publisher (no direct GPIO on Pi5 -- Pi4 drives the ESP32)
     # ------------------------------------------------------------------ #
-    if args.hardware == "pigpio":
-        pigpio_host = os.getenv("PIGPIO_HOST", "127.0.0.1")
-        pigpio_port = int(os.getenv("PIGPIO_PORT", "8888"))
-        servo = PigpioServoDriver(
-            pin=args.servo_pin,
-            host=pigpio_host,
-            port=pigpio_port,
-        )
-        base = PigpioBaseDriver(
-            out1=_env_int(("BASE_OUT1", "BASE_BIT2_PIN"), 17),
-            out2=_env_int(("BASE_OUT2", "BASE_BIT1_PIN"), 27),
-            out3=_env_int(("BASE_OUT3", "BASE_BIT0_PIN"), 22),
-            host=pigpio_host,
-            port=pigpio_port,
-        )
-        relay = PigpioRelayDriver(
-            relay_pin=_env_int(("RELAY_PIN",), 13),
-            power_relay_pin=_env_int(("POWER_RELAY_PIN", "POWER_PIN"), 5),
-            relay_active_low=_env_bool("RELAY_ACTIVE_LOW", False),
-            power_active_low=_env_bool("POWER_RELAY_ACTIVE_LOW", False),
-            power_on_pulse_ms=_env_int(("POWER_ON_PULSE_MS",), 100),
-            power_off_pulse_ms=_env_int(("POWER_OFF_PULSE_MS",), 3000),
-            host=pigpio_host,
-            port=pigpio_port,
-        )
-        hardware_source = "control-direct"
-    else:
-        servo = JetsonServoDriver(pin=args.servo_pin)
-        base = JetsonBaseDriver(
-            pin_bit2=_env_int(("BASE_BIT2_PIN",), 15),
-            pin_bit1=_env_int(("BASE_BIT1_PIN",), 13),
-            pin_bit0=_env_int(("BASE_BIT0_PIN",), 11),
-        )
-        relay = JetsonRelayDriver(
-            relay_pin=_env_int(("RELAY_PIN",), 18),
-            power_relay_pin=_env_int(("POWER_PIN", "POWER_RELAY_PIN"), 16),
-            relay_active_low=_env_bool("RELAY_ACTIVE_LOW", True),
-            power_active_low=_env_bool("POWER_RELAY_ACTIVE_LOW", True),
-            power_on_pulse_ms=_env_int(("POWER_ON_PULSE_MS",), 100),
-            power_off_pulse_ms=_env_int(("POWER_OFF_PULSE_MS",), 3000),
-        )
-        hardware_source = "jetson"
-
-    # HC-SR04 is only available on the pigpio/Raspberry Pi direct-control path.
-    # Its Echo timing is callback-based; update() below never waits for a pulse.
-    if args.hardware == "pigpio":
-        sonar = UltrasonicSafety.from_env(
-            host=os.getenv("PIGPIO_HOST", "127.0.0.1"),
-            port=int(os.getenv("PIGPIO_PORT", "8888")),
-        )
-    else:
-        sonar = UltrasonicSafety(SonarConfig(enabled=False))
+    mqtt_publisher = Raspi5MqttPublisher()
+    mqtt_publisher.connect()
+    hardware_source = "pi5-mqtt"
 
     # ------------------------------------------------------------------ #
     # Shared telemetry
@@ -316,19 +256,18 @@ def main() -> None:
         "frame": 0, "fsm": "GAPPING", "calib_active": False,
         "theta": None, "theta_src": "none",
         "servo": 0.0, "loop_ms": 0.0,
-        "base": "STOP", "relay_on": False, "power_pulsing": False,
-        "object_state": "none", "object_pause_active": False,
-        "object_count": 0, "object_label": None, "object_conf": None,
-        "object_boxes": [], "object_detector_error": None,
-        "sonar_enabled": False, "sonar_available": False,
-        "sonar_blocked": False, "sonar_distance_cm": None,
-        "sonar_age_s": None, "sonar_reason": "",
+        "base": "STOP", "relay_on": False,
         "manual_override_active": False, "manual_override_age_s": None,
         "manual_drive": 0.0, "manual_steer": 0.0,
         "manual_blocked_reason": "",
     }
     last_base_cmd = "STOP"
+    last_servo_angle = 90.0
+    last_relay_on = False
     last_manual_servo_angle: float | None = None
+
+    def _publish_control() -> None:
+        mqtt_publisher.publish_control(last_servo_angle, last_base_cmd)
 
     def _update_shared(frame: np.ndarray, tel: dict[str, Any]) -> None:
         nonlocal shared_telemetry
@@ -355,19 +294,6 @@ def main() -> None:
                 "servo_angle": tel.get("servo"),
                 "loop_ms": tel.get("loop_ms"),
                 "route_mode": tel.get("current_route_mode"),
-                "object_state": tel.get("object_state"),
-                "object_pause_active": tel.get("object_pause_active"),
-                "object_count": tel.get("object_count"),
-                "object_label": tel.get("object_label"),
-                "object_conf": tel.get("object_conf"),
-                "object_boxes": tel.get("object_boxes"),
-                "object_detector_error": tel.get("object_detector_error"),
-                "sonar_enabled": tel.get("sonar_enabled"),
-                "sonar_available": tel.get("sonar_available"),
-                "sonar_blocked": tel.get("sonar_blocked"),
-                "sonar_distance_cm": tel.get("sonar_distance_cm"),
-                "sonar_age_s": tel.get("sonar_age_s"),
-                "sonar_reason": tel.get("sonar_reason"),
                 "manual_override_active": tel.get("manual_override_active"),
                 "manual_override_age_s": tel.get("manual_override_age_s"),
                 "manual_drive": tel.get("manual_drive"),
@@ -397,20 +323,25 @@ def main() -> None:
 
     def _base_handler(cmd: str) -> None:
         nonlocal last_base_cmd
-        base.command(cmd)
         last_base_cmd = cmd.upper()
+        _publish_control()
+
+    def _servo_handler(angle: float) -> None:
+        nonlocal last_servo_angle
+        last_servo_angle = angle
+        _publish_control()
 
     def _relay_handler(state: str) -> None:
-        if state == "ON":
-            relay.relay_on()
-        elif state == "OFF":
-            relay.relay_off()
+        nonlocal last_relay_on
+        if state.upper() not in ("ON", "OFF"):
+            return
+        last_relay_on = state.upper() == "ON"
+        mqtt_publisher.publish_relay(state.upper())
 
     def _power_handler(state: str) -> None:
-        if state == "ON":
-            relay.power_on()
-        elif state == "OFF":
-            relay.power_off()
+        # No confirmed MQTT topic for the power relay on the Pi4/ESP32 side
+        # yet -- log only so the dashboard button doesn't silently no-op.
+        logger.warning("Power relay control (%s) is not wired to MQTT yet", state)
 
     # ------------------------------------------------------------------ #
     # HTTP Dashboard
@@ -452,8 +383,6 @@ def main() -> None:
         tune_file,
         idle_getter=_tune_idle_state,
     )
-    object_detector = ObjectDetector.from_env()
-    object_detection_script_only = _env_bool("OBJECT_DETECTION_SCRIPT_ONLY", False)
     manual_override = ManualOverrideController.from_env(
         center_angle=90.0 + _env_float(("SERVO_CENTER_ANGLE",), -8.0),
         max_steer=_env_float(("MAX_STEERING_OFFSET",), 60.0),
@@ -496,7 +425,7 @@ def main() -> None:
 
         _steps: list[dict[str, Any]] = []
         script_runner = JetsonScriptRunner()
-        script_runner.set_handlers(_base_handler, servo.send_angle, _relay_handler)
+        script_runner.set_handlers(_base_handler, _servo_handler, _relay_handler)
 
         def _submit_script(body: str) -> bool:
             nonlocal route_session, route_video_writer, route_video_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
@@ -665,7 +594,7 @@ def main() -> None:
                     cap.release()
                 except Exception:
                     pass
-                base.stop()
+                _base_handler("STOP")
                 cap = acquire_camera()
                 time.sleep(0.1)
                 continue
@@ -679,8 +608,8 @@ def main() -> None:
                 display_frame = calibrator.render_frame(frame, calibration)
             except CalibrationProcessingError as exc:
                 logger.exception("Calibration failure: %s", exc)
-                servo.center()
-                base.stop()
+                _servo_handler(90.0)
+                _base_handler("STOP")
                 break
 
             theta = calibration.observation_angle
@@ -692,59 +621,31 @@ def main() -> None:
 
             now = time.monotonic()
             script_running = script_runner is not None and script_runner.is_running()
-            manual_wants_control = manual_override.wants_control(now=now)
-            if object_detection_script_only and not script_running and not manual_wants_control:
-                object_status = ObjectDetectionStatus("none", False, 0, None, None, ())
-            else:
-                object_status = object_detector.process(frame, now=now)
-            display_frame = draw_object_boxes(display_frame, object_status.object_boxes)
-            object_pause_active = object_status.object_pause_active
-            sonar_status = sonar.update(now=now)
-            sonar_pause_active = sonar_status.blocked
-            safety_pause_active = object_pause_active or sonar_pause_active
 
+            # Object detection / ultrasonic safety gating removed on Pi5 --
+            # Pi5 has no actuators to gate; if this is still wanted, it
+            # belongs on the Pi4/ESP32 side that actually drives the car.
             manual_decision = manual_override.evaluate(
                 now=now,
-                object_near=safety_pause_active or object_status.object_state == "near",
+                object_near=False,
                 estop_active=False,
             )
             if manual_decision.release_servo and not manual_decision.active:
                 if last_base_cmd.upper() != "STOP":
                     _base_handler("STOP")
-                release_servo = getattr(servo, "release", None)
-                if callable(release_servo):
-                    release_servo()
                 last_manual_servo_angle = None
 
             if script_runner is not None:
-                if manual_decision.pause_script:
-                    script_runner.set_paused(True, "manual_override")
-                elif sonar_pause_active:
-                    script_runner.set_paused(True, f"sonar_{sonar_status.reason or 'blocked'}")
-                else:
-                    script_runner.set_paused(
-                        object_pause_active,
-                        "object_detected" if object_pause_active else "",
-                    )
+                script_runner.set_paused(manual_decision.pause_script, "manual_override" if manual_decision.pause_script else "")
 
-            if safety_pause_active and not manual_decision.active:
-                if last_base_cmd.upper() != "STOP":
-                    _base_handler("STOP")
-                release_servo = getattr(servo, "release", None)
-                if callable(release_servo):
-                    release_servo()
-            elif manual_decision.active:
+            if manual_decision.active:
                 if manual_decision.base_command != last_base_cmd.upper():
                     _base_handler(manual_decision.base_command)
-                if manual_decision.release_servo:
-                    release_servo = getattr(servo, "release", None)
-                    if callable(release_servo):
-                        release_servo()
                 if manual_decision.servo_angle is not None and (
                     last_manual_servo_angle is None
                     or abs(last_manual_servo_angle - manual_decision.servo_angle) >= 0.5
                 ):
-                    servo.send_angle(manual_decision.servo_angle)
+                    _servo_handler(manual_decision.servo_angle)
                     last_manual_servo_angle = manual_decision.servo_angle
             else:
                 last_manual_servo_angle = None
@@ -757,13 +658,12 @@ def main() -> None:
                 reverse=_env_bool("SERVO_REVERSE", False),
             )
             if (
-                not safety_pause_active
-                and not manual_decision.active
+                not manual_decision.active
                 and script_runner is not None
                 and script_running
                 and script_runner.vision_pid_active()
             ):
-                servo.send_angle(output_angle)
+                _servo_handler(output_angle)
             final_angle = (
                 manual_decision.servo_angle
                 if manual_decision.active and manual_decision.servo_angle is not None
@@ -809,13 +709,13 @@ def main() -> None:
             tel.update({
                 "source": hardware_source,
                 "rpi_online": True,
-                "mqtt_connected": True,
+                "mqtt_connected": mqtt_publisher.connected,
                 "estop_active": False,
                 "steer_angle": f"{final_angle:.1f}",
                 "current_route_mode": "AUTO",
                 "route_id": current_route_id,
                 "centered": fsm_state == "GAPPING",
-                "relay_on": relay.relay_state,
+                "relay_on": last_relay_on,
                 "servo_feedback_enabled": False,
                 "servo_feedback_angle": f"{servo_angle:.1f}",
                 "servo_feedback_error": "0.0",
@@ -829,11 +729,7 @@ def main() -> None:
                 "servo": f"{servo_angle:.2f}",
                 "loop_ms": f"{loop_ms:.1f}",
                 "base": last_base_cmd,
-                "power_pulsing": relay.power_pulsing,
             })
-            tel.update(object_status.telemetry())
-            tel.update(sonar_status.telemetry())
-            tel["safety_pause_active"] = safety_pause_active
             tel.update(manual_decision.telemetry())
             if route_session is not None:
                 mono_now = time.monotonic()
@@ -888,14 +784,10 @@ def main() -> None:
         logger.info("Interrupted by user")
     finally:
         _finalize_route("INTERRUPTED")
-        object_detector.close()
-        sonar.close()
-        servo.center()
+        _servo_handler(90.0)
         time.sleep(0.3)
-        base.stop()
-        servo.close()
-        base.close()
-        relay.close()
+        _base_handler("STOP")
+        mqtt_publisher.close()
         cap.release()
         if http is not None:
             http.stop()
