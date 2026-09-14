@@ -131,8 +131,17 @@ ssh_cmd() {
                 "$@" 2>/dev/null
             return
         fi
-        log_err "PI5_PASSWORD is set but sshpass is not installed."
-        log_err "Install: sudo apt-get install -y sshpass"
+        local pl
+        pl="$(command -v plink 2>/dev/null || true)"
+        if [[ -n "$pl" ]]; then
+            # plink -batch refuses unknown host keys instead of prompting --
+            # if this fails on first run, cache the key once interactively:
+            #   plink -ssh <user>@<host> -P <port> exit
+            "$pl" -ssh -batch -pw "$password" -P "$PI5_PORT" "$@"
+            return
+        fi
+        log_err "PI5_PASSWORD is set but neither sshpass nor plink (PuTTY) is on PATH."
+        log_err "Install sshpass, install PuTTY (provides plink/pscp), or switch to SSH key auth."
         exit 1
     fi
     ssh -p "$PI5_PORT" \
@@ -155,7 +164,13 @@ scp_cmd() {
                 "$@"
             return
         fi
-        log_err "sshpass required for password-based SCP."
+        local pl
+        pl="$(command -v pscp 2>/dev/null || true)"
+        if [[ -n "$pl" ]]; then
+            "$pl" -batch -pw "$password" -P "$PI5_PORT" "$@"
+            return
+        fi
+        log_err "PI5_PASSWORD is set but neither sshpass nor pscp (PuTTY) is on PATH."
         exit 1
     fi
     scp -P "$PI5_PORT" \
