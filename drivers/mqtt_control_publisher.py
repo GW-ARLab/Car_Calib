@@ -116,6 +116,22 @@ class Raspi5MqttPublisher:
     def connected(self) -> bool:
         return self._connected
 
+    def publish_mode_camera(self) -> None:
+        """Re-assert car/control/mode=camera on the Pi4 (retained).
+
+        Call this whenever a control command originates from this Pi5 --
+        vision-auto, a route script starting, or a joystick/manual override
+        becoming active -- so a Pi4 that drifted into "controller" mode
+        (e.g. a phone app driving it directly) is pulled back before the
+        command that follows is dropped.
+        """
+        if self._client is None or not self._connected:
+            return
+        try:
+            self._client.publish(MQTT_CONTROL_MODE_TOPIC, payload="camera", retain=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Pi5 MQTT publish_mode_camera error: %s", exc)
+
     def publish_control(self, servo_angle_0_180: float, base_command: str) -> None:
         """Publish steering + drive state as "<angle>,<drive_code>"."""
         if self._client is None or not self._connected:

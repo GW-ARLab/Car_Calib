@@ -265,6 +265,7 @@ def main() -> None:
     last_servo_angle = 90.0
     last_relay_on = False
     last_manual_servo_angle: float | None = None
+    last_manual_active = False
 
     def _publish_control() -> None:
         mqtt_publisher.publish_control(last_servo_angle, last_base_cmd)
@@ -434,6 +435,7 @@ def main() -> None:
             preset_name = str(payload.get("preset_name") or "").strip()
             ok = script_runner.submit(steps)
             if ok:
+                mqtt_publisher.publish_mode_camera()
                 if route_video_writer is not None:
                     try:
                         route_video_writer.release()
@@ -639,6 +641,10 @@ def main() -> None:
                 script_runner.set_paused(manual_decision.pause_script, "manual_override" if manual_decision.pause_script else "")
 
             if manual_decision.active:
+                if not last_manual_active:
+                    # Joystick just took control -- make sure Pi4 is in
+                    # camera mode before the command below goes out.
+                    mqtt_publisher.publish_mode_camera()
                 if manual_decision.base_command != last_base_cmd.upper():
                     _base_handler(manual_decision.base_command)
                 if manual_decision.servo_angle is not None and (
@@ -649,6 +655,7 @@ def main() -> None:
                     last_manual_servo_angle = manual_decision.servo_angle
             else:
                 last_manual_servo_angle = None
+            last_manual_active = manual_decision.active
 
             # --- servo ---
             output_angle = map_calibrated_servo(
