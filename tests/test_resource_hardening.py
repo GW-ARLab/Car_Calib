@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from runtime.dashboard_stream import DashboardStreamBroker
-from runtime.jetson_http import JetsonHttpServer
+from runtime.pi5_http import Pi5HttpServer
 from runtime.resource_limits import ScriptValidationError, StorageManager, validate_route_steps
 import runtime.resource_limits as resource_limits
 
@@ -92,6 +92,6 @@ def test_stream_broker_shares_one_bounded_stream() -> None:
 
 
 def test_lan_dashboard_requires_token() -> None:
-    server = JetsonHttpServer(host="0.0.0.0", port=0, token="")
+    server = Pi5HttpServer(host="0.0.0.0", port=0, token="")
     with pytest.raises(ValueError, match="DASHBOARD_TOKEN"):
         server.start()

@@ -1,4 +1,4 @@
-"""Embedded HTTP server for Jetson Nano dashboard.
+"""Embedded HTTP server for the Pi5 dashboard.
 
 Serves:
   /                     → runtime/dashboard/index.html
@@ -467,8 +467,8 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             self._thread_slots.release()
 
 
-class JetsonHttpServer:
-    """Embedded HTTP server for the Jetson Nano dashboard."""
+class Pi5HttpServer:
+    """Embedded HTTP server for the Pi5 dashboard."""
 
     def __init__(
         self,

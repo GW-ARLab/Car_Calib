@@ -8,7 +8,7 @@ UART. Embedded HTTP dashboard (MJPEG stream, telemetry, route scripts,
 tuning) is unchanged.
 
 Usage:
-    python3 main_jetson.py [--camera 0] [--hz 30] [--port 8080]
+    python3 main_pi5.py [--camera 0] [--hz 30] [--port 8080]
 
 Env vars:
     SERVO_CENTER_ANGLE       (default: -8)
@@ -45,9 +45,9 @@ from config.settings import (
 )
 from drivers.mqtt_control_publisher import Raspi5MqttPublisher
 from models.robot_state import RobotState, FSMState
-from runtime.jetson_http import JetsonHttpServer
+from runtime.pi5_http import Pi5HttpServer
 from runtime.route_logging import RouteSession
-from runtime.jetson_script_runner import JetsonScriptRunner
+from runtime.pi5_script_runner import Pi5ScriptRunner
 from runtime.calib_tuning import CalibTuneManager
 from runtime.manual_override import ManualOverrideController
 from runtime.dashboard_stream import DashboardStreamBroker
@@ -55,7 +55,7 @@ from runtime.resource_limits import ScriptValidationError, StorageManager, valid
 from unified_calibration_components import UnifiedCalibrator, CalibrationProcessingError
 from runtime.sasc_experiment_log import SascExperimentLogger
 
-logger = logging.getLogger("jetson")
+logger = logging.getLogger("pi5")
 
 def _env_int(names: tuple[str, ...], default: int) -> int:
     for name in names:
@@ -79,7 +79,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Jetson Nano calibration + dashboard")
+    p = argparse.ArgumentParser(description="Raspberry Pi 5 calibration + dashboard")
     p.add_argument("--camera", type=int, default=MAIN_CAMERA_INDEX)
     p.add_argument("--hz", type=float, default=MAIN_TARGET_HZ)
     p.add_argument("--csv", type=str, default=MAIN_CSV_LOG_FILE)
@@ -346,8 +346,8 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # HTTP Dashboard
     # ------------------------------------------------------------------ #
-    http: JetsonHttpServer | None = None
-    script_runner: JetsonScriptRunner | None = None
+    http: Pi5HttpServer | None = None
+    script_runner: Pi5ScriptRunner | None = None
     route_session: RouteSession | None = None
     route_video_writer: cv2.VideoWriter | None = None
     route_video_disabled = False
@@ -389,7 +389,7 @@ def main() -> None:
     )
 
     if not args.no_dashboard:
-        http = JetsonHttpServer(host=args.host, port=args.port)
+        http = Pi5HttpServer(host=args.host, port=args.port)
         http.set_stream_broker(stream_broker)
         http.set_status_getter(_status_getter)
         http.set_base_handler(_base_handler)
@@ -424,7 +424,7 @@ def main() -> None:
             _save_presets()
 
         _steps: list[dict[str, Any]] = []
-        script_runner = JetsonScriptRunner()
+        script_runner = Pi5ScriptRunner()
         script_runner.set_handlers(_base_handler, _servo_handler, _relay_handler)
 
         def _submit_script(body: str) -> bool:

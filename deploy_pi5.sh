@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =========================================================================== #
-# Jetson Nano deploy script — one command to build & run
+# Raspberry Pi 5 deploy script — one command to build & run
 # =========================================================================== #
 
 RED='\033[0;31m'
@@ -21,7 +21,7 @@ FORCE_RECREATE=false
 usage() {
     cat <<'EOF'
 Usage:
-  ./deploy_jetson.sh [--no-build] [--recreate] [--env <path>]
+  ./deploy_pi5.sh [--no-build] [--recreate] [--env <path>]
 
 Options:
   --no-build    Skip Docker image build (reuse existing image)
@@ -29,8 +29,8 @@ Options:
   --env <path>  Use custom env file (default: .env)
 
 Setup:
-  1. Copy .env.jetson → .env and set MQTT_BROKER_HOST to the Pi4/broker
-  2. Run ./deploy_jetson.sh
+  1. Copy .env.pi5 → .env and set MQTT_BROKER_HOST to the Pi4/broker
+  2. Run ./deploy_pi5.sh
   3. Dashboard: http://<pi5-ip>:8080
 EOF
 }
@@ -69,7 +69,7 @@ done
 # --------------------------------------------------------------------------- #
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   Jetson Nano Deploy${NC}"
+echo -e "${BLUE}   Raspberry Pi 5 Deploy${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -95,8 +95,8 @@ fi
 # .env
 if [[ ! -f "$ENV_FILE" ]]; then
     echo -e "${YELLOW}No .env found at $ENV_FILE${NC}"
-    echo -e "${YELLOW}Copying .env.jetson → .env (review before deploying!)${NC}"
-    cp .env.jetson "$ENV_FILE"
+    echo -e "${YELLOW}Copying .env.pi5 → .env (review before deploying!)${NC}"
+    cp .env.pi5 "$ENV_FILE"
     echo ""
     echo -e "${YELLOW}Review $ENV_FILE and re-run.${NC}"
     echo -e "${YELLOW}Key vars to verify: MQTT_BROKER_HOST, DASHBOARD_TOKEN${NC}"
@@ -107,8 +107,8 @@ fi
 # Build & Start
 # --------------------------------------------------------------------------- #
 
-COMPOSE_FILE=docker-compose.jetson.yml
-CONTAINER_NAME=car-calib-jetson
+COMPOSE_FILE=docker-compose.pi5.yml
+CONTAINER_NAME=car-calib-pi5
 
 # Stop old if running
 if docker ps -q --filter "name=$CONTAINER_NAME" | grep -q .; then
@@ -147,15 +147,15 @@ fi
 # Summary
 # --------------------------------------------------------------------------- #
 
-JETSON_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+PI5_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 PORT="${DASHBOARD_PORT:-8080}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}   Jetson Nano Deploy Complete${NC}"
+echo -e "${GREEN}   Raspberry Pi 5 Deploy Complete${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo -e "  Dashboard:  ${BLUE}http://${JETSON_IP}:${PORT}${NC}"
+echo -e "  Dashboard:  ${BLUE}http://${PI5_IP}:${PORT}${NC}"
 echo -e "  Logs:       ${BLUE}docker logs -f ${CONTAINER_NAME}${NC}"
 echo -e "  Restart:    ${BLUE}docker restart ${CONTAINER_NAME}${NC}"
 echo -e "  Stop:       ${BLUE}$COMPOSE_CMD -f ${COMPOSE_FILE} down${NC}"

@@ -6,14 +6,14 @@ import time
 
 import pytest
 
-from runtime.jetson_script_runner import JetsonScriptRunner
+from runtime.pi5_script_runner import Pi5ScriptRunner
 
 
 @pytest.mark.parametrize("pause_reason", ["object_detected", "manual_override"])
 def test_runner_pause_freezes_step_elapsed_and_resume_republishes(pause_reason: str):
     base_cmds: list[str] = []
     servo_angles: list[float] = []
-    runner = JetsonScriptRunner()
+    runner = Pi5ScriptRunner()
     runner.set_handlers(base_cmds.append, servo_angles.append, lambda _state: None)
 
     assert runner.submit([{"action": "left", "duration_s": 0.25}]) is True

@@ -1,4 +1,4 @@
-"""Route script runner for Jetson direct control."""
+"""Route script runner for Pi5 (no direct hardware)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ BASE_MAP: dict[str, tuple[int, int, int]] = {
 _VALID_ACTIONS = {"forward", "backward", "straight", "left", "right", "turn_left", "turn_right", "stop", "pause"}
 
 
-class JetsonScriptRunner:
+class Pi5ScriptRunner:
     """Runs route scripts in a background thread using direct callbacks."""
 
     def __init__(self) -> None:

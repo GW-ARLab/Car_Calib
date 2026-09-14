@@ -2,21 +2,21 @@
 set -uo pipefail
 
 # =========================================================================== #
-# Jetson Nano remote deploy — archive → SCP → SSH → Docker build & start
+# Raspberry Pi 5 remote deploy — archive → SCP → SSH → Docker build & start
 # =========================================================================== #
 # Run from your dev machine. Requires:
-#   - sshpass (optional, only if JETSON_PASSWORD is set)
+#   - sshpass (optional, only if PI5_PASSWORD is set)
 #   - tar + pigz (optional, fallback gzip)
 #
 # Usage:
-#   ./deploy_jetson_remote.sh [--yes] [--no-build] [--env .env.jetson]
+#   ./deploy_pi5_remote.sh [--yes] [--no-build] [--env .env.pi5]
 #
 # Env (set in your env file or export):
-#   JETSON_HOST        Jetson IP or hostname
-#   JETSON_USER        SSH user (default: root)
-#   JETSON_PORT        SSH port (default: 22)
-#   JETSON_PASSWORD    SSH password (blank = use key auth)
-#   JETSON_DEST_DIR    Target dir on Jetson (default: /opt/car-calib-jetson)
+#   PI5_HOST        Pi5 IP or hostname
+#   PI5_USER        SSH user (default: root)
+#   PI5_PORT        SSH port (default: 22)
+#   PI5_PASSWORD    SSH password (blank = use key auth)
+#   PI5_DEST_DIR    Target dir on Pi5 (default: /opt/car-calib-pi5)
 # =========================================================================== #
 
 RED='\033[0;31m'
@@ -28,7 +28,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PROJECT_NAME="${PROJECT_NAME:-car-calib-jetson}"
+PROJECT_NAME="${PROJECT_NAME:-car-calib-pi5}"
 VERSION="$(date -u +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 
 AUTO_CONFIRM=false
@@ -37,19 +37,19 @@ SKIP_BUILD=false
 usage() {
     cat <<'EOF'
 Usage:
-  ./deploy_jetson_remote.sh [--yes] [--no-build] [--env <path>]
+  ./deploy_pi5_remote.sh [--yes] [--no-build] [--env <path>]
 
 Options:
   --yes         Skip confirmation prompt
   --no-build    Skip docker build on remote (just upload + restart)
-  --env <path>  Custom env file (default: .env.jetson)
+  --env <path>  Custom env file (default: .env.pi5)
 
 Setup:
-  1. Create .env.jetson.remote with lines:
-       JETSON_HOST=192.168.x.x
-       JETSON_USER=root
-       JETSON_PASSWORD=yourpass   (or leave blank for key auth)
-  2. Run: ./deploy_jetson_remote.sh
+  1. Create .env.pi5.remote with lines:
+       PI5_HOST=192.168.x.x
+       PI5_USER=root
+       PI5_PASSWORD=yourpass   (or leave blank for key auth)
+  2. Run: ./deploy_pi5_remote.sh
 EOF
 }
 
@@ -75,7 +75,7 @@ shell_quote() {
 # --------------------------------------------------------------------------- #
 # Parse args
 # --------------------------------------------------------------------------- #
-ENV_FILE="${ENV_FILE:-${SCRIPT_DIR}/.env.jetson}"
+ENV_FILE="${ENV_FILE:-${SCRIPT_DIR}/.env.pi5}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -89,13 +89,13 @@ done
 
 if [[ ! -f "$ENV_FILE" ]]; then
     log_err "Env file not found: $ENV_FILE"
-    log_err "Copy .env.jetson to $ENV_FILE and add JETSON_HOST, JETSON_USER, JETSON_PASSWORD"
+    log_err "Copy .env.pi5 to $ENV_FILE and add PI5_HOST, PI5_USER, PI5_PASSWORD"
     exit 1
 fi
 
-# Source env (these override anything in .env.jetson)
-export JETSON_HOST JETSON_USER JETSON_PORT JETSON_PASSWORD JETSON_DEST_DIR
-export JETSON_HOST JETSON_USER JETSON_PORT JETSON_PASSWORD JETSON_DEST_DIR
+# Source env (these override anything in .env.pi5)
+export PI5_HOST PI5_USER PI5_PORT PI5_PASSWORD PI5_DEST_DIR
+export PI5_HOST PI5_USER PI5_PORT PI5_PASSWORD PI5_DEST_DIR
 
 set -a
 # shellcheck disable=SC1090
@@ -103,15 +103,15 @@ source "$ENV_FILE"
 set +a
 
 # Defaults
-JETSON_HOST="${JETSON_HOST:-}"
-JETSON_USER="${JETSON_USER:-root}"
-JETSON_PORT="${JETSON_PORT:-22}"
-JETSON_PASSWORD="$(trim "${JETSON_PASSWORD:-}")"
-JETSON_DEST_DIR="$(trim "${JETSON_DEST_DIR:-/opt/car-calib-jetson}")"
-COMPOSE_FILE="docker-compose.jetson.yml"
+PI5_HOST="${PI5_HOST:-}"
+PI5_USER="${PI5_USER:-root}"
+PI5_PORT="${PI5_PORT:-22}"
+PI5_PASSWORD="$(trim "${PI5_PASSWORD:-}")"
+PI5_DEST_DIR="$(trim "${PI5_DEST_DIR:-/opt/car-calib-pi5}")"
+COMPOSE_FILE="docker-compose.pi5.yml"
 
-if [[ -z "$JETSON_HOST" ]]; then
-    log_err "JETSON_HOST not set. Add it to $ENV_FILE"
+if [[ -z "$PI5_HOST" ]]; then
+    log_err "PI5_HOST not set. Add it to $ENV_FILE"
     exit 1
 fi
 
@@ -125,17 +125,17 @@ ssh_cmd() {
         local sp
         sp="$(command -v sshpass 2>/dev/null || true)"
         if [[ -n "$sp" ]]; then
-            "$sp" -p "$password" ssh -p "$JETSON_PORT" \
+            "$sp" -p "$password" ssh -p "$PI5_PORT" \
                 -o StrictHostKeyChecking=accept-new \
                 -o ConnectTimeout=10 \
                 "$@" 2>/dev/null
             return
         fi
-        log_err "JETSON_PASSWORD is set but sshpass is not installed."
+        log_err "PI5_PASSWORD is set but sshpass is not installed."
         log_err "Install: sudo apt-get install -y sshpass"
         exit 1
     fi
-    ssh -p "$JETSON_PORT" \
+    ssh -p "$PI5_PORT" \
         -o BatchMode=yes \
         -o StrictHostKeyChecking=accept-new \
         -o ConnectTimeout=10 \
@@ -149,7 +149,7 @@ scp_cmd() {
         local sp
         sp="$(command -v sshpass 2>/dev/null || true)"
         if [[ -n "$sp" ]]; then
-            "$sp" -p "$password" scp -P "$JETSON_PORT" \
+            "$sp" -p "$password" scp -P "$PI5_PORT" \
                 -o StrictHostKeyChecking=accept-new \
                 -o ConnectTimeout=10 \
                 "$@"
@@ -158,7 +158,7 @@ scp_cmd() {
         log_err "sshpass required for password-based SCP."
         exit 1
     fi
-    scp -P "$JETSON_PORT" \
+    scp -P "$PI5_PORT" \
         -o BatchMode=yes \
         -o StrictHostKeyChecking=accept-new \
         -o ConnectTimeout=10 \
@@ -169,16 +169,16 @@ scp_cmd() {
 # Confirm
 # --------------------------------------------------------------------------- #
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   Jetson Nano Remote Deploy${NC}"
+echo -e "${BLUE}   Raspberry Pi 5 Remote Deploy${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
-echo -e "  Target:    ${BLUE}${JETSON_USER}@${JETSON_HOST}:${JETSON_PORT}${NC}"
-echo -e "  Dest:      ${BLUE}${JETSON_DEST_DIR}${NC}"
+echo -e "  Target:    ${BLUE}${PI5_USER}@${PI5_HOST}:${PI5_PORT}${NC}"
+echo -e "  Dest:      ${BLUE}${PI5_DEST_DIR}${NC}"
 echo -e "  Version:   ${BLUE}${VERSION}${NC}"
 echo ""
 
 if [[ "$AUTO_CONFIRM" != "true" ]]; then
-    read -r -p "Deploy to Jetson Nano? [y/N]: " confirm
+    read -r -p "Deploy to Raspberry Pi 5? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         log_warn "Cancelled"
         exit 0
@@ -189,9 +189,9 @@ fi
 # Step 1: Check SSH
 # --------------------------------------------------------------------------- #
 log_step "[1/4] Checking SSH connectivity..."
-if ! ssh_cmd "$JETSON_PASSWORD" "${JETSON_USER}@${JETSON_HOST}" exit 2>/dev/null; then
-    log_err "Cannot SSH to ${JETSON_USER}@${JETSON_HOST}:${JETSON_PORT}"
-    log_err "Check JETSON_HOST, JETSON_PASSWORD, or SSH key access."
+if ! ssh_cmd "$PI5_PASSWORD" "${PI5_USER}@${PI5_HOST}" exit 2>/dev/null; then
+    log_err "Cannot SSH to ${PI5_USER}@${PI5_HOST}:${PI5_PORT}"
+    log_err "Check PI5_HOST, PI5_PASSWORD, or SSH key access."
     exit 1
 fi
 log_ok "SSH OK"
@@ -222,22 +222,22 @@ log_ok "Archive: $ARCHIVE_PATH ($(du -h "$ARCHIVE_PATH" | cut -f1))"
 # --------------------------------------------------------------------------- #
 # Step 3: Upload
 # --------------------------------------------------------------------------- #
-log_step "[3/4] Uploading to Jetson..."
+log_step "[3/4] Uploading to Pi5..."
 
-ssh_cmd "$JETSON_PASSWORD" "${JETSON_USER}@${JETSON_HOST}" "mkdir -p ${JETSON_DEST_DIR}/releases" 2>/dev/null || true
+ssh_cmd "$PI5_PASSWORD" "${PI5_USER}@${PI5_HOST}" "mkdir -p ${PI5_DEST_DIR}/releases" 2>/dev/null || true
 
-scp_cmd "$JETSON_PASSWORD" "$ARCHIVE_PATH" "${JETSON_USER}@${JETSON_HOST}:/tmp/${PROJECT_NAME}-${VERSION}.tar.gz"
-scp_cmd "$JETSON_PASSWORD" "$ENV_FILE" "${JETSON_USER}@${JETSON_HOST}:${remote_env}"
+scp_cmd "$PI5_PASSWORD" "$ARCHIVE_PATH" "${PI5_USER}@${PI5_HOST}:/tmp/${PROJECT_NAME}-${VERSION}.tar.gz"
+scp_cmd "$PI5_PASSWORD" "$ENV_FILE" "${PI5_USER}@${PI5_HOST}:${remote_env}"
 
 log_ok "Upload complete"
 
 # --------------------------------------------------------------------------- #
 # Step 4: Deploy remote
 # --------------------------------------------------------------------------- #
-log_step "[4/4] Deploying on Jetson..."
+log_step "[4/4] Deploying on Pi5..."
 
-ssh_cmd "$JETSON_PASSWORD" "${JETSON_USER}@${JETSON_HOST}" \
-    DEST_DIR="$(shell_quote "$JETSON_DEST_DIR")" \
+ssh_cmd "$PI5_PASSWORD" "${PI5_USER}@${PI5_HOST}" \
+    DEST_DIR="$(shell_quote "$PI5_DEST_DIR")" \
     VERSION="$(shell_quote "$VERSION")" \
     PROJECT_NAME="$(shell_quote "$PROJECT_NAME")" \
     COMPOSE_FILE="$(shell_quote "$COMPOSE_FILE")" \
@@ -294,7 +294,7 @@ echo "[remote] Compose: $COMPOSE_CMD -f $COMPOSE_FILE"
 # Stop old
 $COMPOSE_CMD -f "$COMPOSE_FILE" down 2>/dev/null || true
 
-# Build & start (may take 5-10 min first time on Jetson Nano)
+# Build & start (may take 5-10 min first time on Raspberry Pi 5)
 BUILD_LOG="/tmp/car-calib-build-${VERSION}.log"
 echo "[remote] Build starting... (log: $BUILD_LOG)"
 if [[ "$SKIP_BUILD" == "true" ]]; then
@@ -323,7 +323,7 @@ else
 fi
 sleep 1
 $COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null || true
-echo "[remote] Remote deploy complete — check with: docker ps | grep car-calib-jetson"
+echo "[remote] Remote deploy complete — check with: docker ps | grep car-calib-pi5"
 
 # Clean old releases (keep 3)
 cd "${root_dir}/releases"
@@ -341,8 +341,8 @@ echo -e "${GREEN}   Remote Deploy Complete${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 DASHBOARD_PORT="${DASHBOARD_PORT:-8080}"
-echo -e "  Dashboard:  ${BLUE}http://${JETSON_HOST}:${DASHBOARD_PORT}${NC}"
-echo -e "  Logs:       ${BLUE}ssh ${JETSON_USER}@${JETSON_HOST} 'docker logs -f car-calib-jetson'${NC}"
+echo -e "  Dashboard:  ${BLUE}http://${PI5_HOST}:${DASHBOARD_PORT}${NC}"
+echo -e "  Logs:       ${BLUE}ssh ${PI5_USER}@${PI5_HOST} 'docker logs -f car-calib-pi5'${NC}"
 echo ""
 
 rm -f "$ARCHIVE_PATH"

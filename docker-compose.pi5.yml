@@ -3,8 +3,8 @@
 # Pi4 DataProcessingCenter, which drives the ESP32 over UART.
 #
 # Start:
-#   cp .env.jetson .env
-#   docker compose -f docker-compose.jetson.yml up -d
+#   cp .env.pi5 .env
+#   docker compose -f docker-compose.pi5.yml up -d
 #
 # Dashboard:
 #   http://<pi5-ip>:8080
@@ -15,11 +15,11 @@ services:
   vision:
     build:
       context: .
-      dockerfile: docker/jetson/Dockerfile
+      dockerfile: docker/pi5/Dockerfile
       args:
         BUILDKIT_INLINE_CACHE: "1"
-    image: car-calib-jetson:latest
-    container_name: car-calib-jetson
+    image: car-calib-pi5:latest
+    container_name: car-calib-pi5
     restart: unless-stopped
     network_mode: host
     devices:

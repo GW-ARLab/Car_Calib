@@ -7,7 +7,7 @@
 # but works.
 #
 # Build:
-#   DOCKER_BUILDKIT=1 docker build -f docker/jetson/Dockerfile -t car-calib-jetson .
+#   DOCKER_BUILDKIT=1 docker build -f docker/pi5/Dockerfile -t car-calib-pi5 .
 
 FROM arm64v8/ubuntu:22.04
 
@@ -33,9 +33,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libgomp1
 
 # ------------------------------------------------------------------ #
-# Layer 2 – Python deps (cached unless requirements_jetson.txt changes)
+# Layer 2 – Python deps (cached unless requirements_pi5.txt changes)
 # ------------------------------------------------------------------ #
-COPY requirements_jetson.txt /tmp/requirements.txt
+COPY requirements_pi5.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install -r /tmp/requirements.txt
 
@@ -50,4 +50,4 @@ ENV MAIN_CSV_LOG_FILE=/data/logs/run_log.csv \
     DASHBOARD_HOST=0.0.0.0 \
     DASHBOARD_PORT=8080
 
-ENTRYPOINT ["python3", "main_jetson.py"]
+ENTRYPOINT ["python3", "main_pi5.py"]
