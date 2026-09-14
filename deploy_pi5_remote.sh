@@ -313,8 +313,13 @@ fi
 
 echo "[remote] Compose: $COMPOSE_CMD -f $COMPOSE_FILE"
 
-# Stop old
+# Stop/remove old. `compose down` only finds containers it recognizes as
+# part of its own project; a container left over from an interrupted
+# previous deploy (e.g. Created but never Started) can silently miss that
+# match and then collide by fixed container_name on the next `up`. Force
+# -remove it directly as a belt-and-suspenders on top of `compose down`.
 $COMPOSE_CMD -f "$COMPOSE_FILE" down 2>/dev/null || true
+sudo docker rm -f car-calib-pi5 2>/dev/null || true
 
 # Build & start (may take 5-10 min first time on Raspberry Pi 5)
 BUILD_LOG="/tmp/car-calib-build-${VERSION}.log"
@@ -335,15 +340,28 @@ while kill -0 $BUILD_PID 2>/dev/null && (( SECONDS < DEADLINE )); do
     sleep 3
 done
 
-# Final status
+# Final status -- capture the real exit code instead of swallowing it, and
+# verify the container actually reached "running" (up -d can exit 0 while
+# still leaving the container Created/Exited on a start failure).
 if kill -0 $BUILD_PID 2>/dev/null; then
     echo "[remote] Build still running (PID=$BUILD_PID) — will continue in background"
     echo "[remote] Check progress: tail -f $BUILD_LOG"
 else
-    wait $BUILD_PID || true
-    echo "[remote] Build done"
+    if wait $BUILD_PID; then
+        echo "[remote] Build done"
+    else
+        echo "[remote] ERROR: 'docker compose up' exited non-zero -- tail of $BUILD_LOG:"
+        tail -40 "$BUILD_LOG" 2>/dev/null
+        exit 1
+    fi
+    sleep 2
+    if ! sudo docker ps --filter "name=^/car-calib-pi5$" --filter "status=running" -q | grep -q .; then
+        echo "[remote] ERROR: container did not reach running state:"
+        sudo docker ps -a --filter "name=car-calib-pi5"
+        sudo docker logs --tail 40 car-calib-pi5 2>&1 || true
+        exit 1
+    fi
 fi
-sleep 1
 $COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null || true
 echo "[remote] Remote deploy complete — check with: sudo docker ps | grep car-calib-pi5"
 
