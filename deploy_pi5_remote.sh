@@ -269,19 +269,20 @@ release_dir="${root_dir}/releases/${VERSION}"
 current_dir="${root_dir}/current"
 remote_archive="/tmp/${PROJECT_NAME}-${VERSION}.tar.gz"
 
-echo "[remote] Extracting release..."
-if ! mkdir -p "$release_dir" 2>/tmp/mkdir_err.$$; then
-    if sudo -n mkdir -p "$release_dir" 2>/dev/null && sudo -n chown -R "$(id -un):$(id -gn)" "$root_dir" 2>/dev/null; then
-        echo "[remote] $root_dir needed sudo to create; chowned to $(id -un)"
-    else
-        echo "[remote] ERROR: cannot create $release_dir ($(cat /tmp/mkdir_err.$$ 2>/dev/null))"
-        echo "[remote] Fix: sudo mkdir -p $root_dir && sudo chown -R \$USER:\$USER $root_dir"
-        echo "[remote]   or set PI5_DEST_DIR to a path this user already owns (e.g. \$HOME/car-calib-pi5)"
-        rm -f /tmp/mkdir_err.$$
-        exit 1
-    fi
+# This script runs non-interactively (no TTY for a sudo password prompt),
+# so it requires passwordless sudo (NOPASSWD) for the deploy user on the
+# Pi5. Set that up once with: sudo visudo -f /etc/sudoers.d/car-calib-deploy
+#   <deploy-user> ALL=(ALL) NOPASSWD: ALL
+if ! sudo -n true 2>/dev/null; then
+    echo "[remote] ERROR: passwordless sudo is required but not configured for this user."
+    echo "[remote] Fix on the Pi5: sudo visudo -f /etc/sudoers.d/car-calib-deploy"
+    echo "[remote]   then add: $(whoami) ALL=(ALL) NOPASSWD: ALL"
+    exit 1
 fi
-rm -f /tmp/mkdir_err.$$
+
+echo "[remote] Extracting release..."
+sudo mkdir -p "$release_dir" || { echo "[remote] ERROR: mkdir $release_dir failed"; exit 1; }
+sudo chown -R "$(id -un):$(id -gn)" "$root_dir" || { echo "[remote] ERROR: chown $root_dir failed"; exit 1; }
 tar -xzf "$remote_archive" -C "$release_dir" || { echo "[remote] ERROR: extracting $remote_archive failed"; exit 1; }
 cp "$REMOTE_ENV" "$release_dir/.env" || { echo "[remote] ERROR: copying env file into release failed"; exit 1; }
 ln -sfn "$release_dir" "$current_dir" || { echo "[remote] ERROR: symlinking $current_dir failed"; exit 1; }
@@ -295,23 +296,13 @@ if ! command -v docker &>/dev/null; then
     exit 1
 fi
 
-# Detect sudo need
-DOCKER_BIN="docker"
-if ! docker ps &>/dev/null 2>&1; then
-    if sudo -n docker ps &>/dev/null 2>&1; then
-        DOCKER_BIN="sudo docker"
-        echo "[remote] Using sudo docker"
-    else
-        echo "[remote] ERROR: docker not accessible (try: sudo usermod -aG docker \$USER && newgrp docker)"
-        exit 1
-    fi
-fi
+DOCKER_BIN="sudo docker"
 
 COMPOSE_CMD=""
 if $DOCKER_BIN compose version &>/dev/null 2>&1; then
     COMPOSE_CMD="$DOCKER_BIN compose"
 elif command -v docker-compose &>/dev/null; then
-    COMPOSE_CMD="docker-compose"
+    COMPOSE_CMD="sudo docker-compose"
 else
     echo "[remote] ERROR: docker compose not found"
     exit 1
@@ -351,7 +342,7 @@ else
 fi
 sleep 1
 $COMPOSE_CMD -f "$COMPOSE_FILE" ps 2>/dev/null || true
-echo "[remote] Remote deploy complete — check with: docker ps | grep car-calib-pi5"
+echo "[remote] Remote deploy complete — check with: sudo docker ps | grep car-calib-pi5"
 
 # Clean old releases (keep 3)
 cd "${root_dir}/releases"
@@ -370,7 +361,7 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 DASHBOARD_PORT="${DASHBOARD_PORT:-8080}"
 echo -e "  Dashboard:  ${BLUE}http://${PI5_HOST}:${DASHBOARD_PORT}${NC}"
-echo -e "  Logs:       ${BLUE}ssh ${PI5_USER}@${PI5_HOST} 'docker logs -f car-calib-pi5'${NC}"
+echo -e "  Logs:       ${BLUE}ssh ${PI5_USER}@${PI5_HOST} 'sudo docker logs -f car-calib-pi5'${NC}"
 echo ""
 
 rm -f "$ARCHIVE_PATH"
