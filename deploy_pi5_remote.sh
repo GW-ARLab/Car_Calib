@@ -270,10 +270,21 @@ current_dir="${root_dir}/current"
 remote_archive="/tmp/${PROJECT_NAME}-${VERSION}.tar.gz"
 
 echo "[remote] Extracting release..."
-mkdir -p "$release_dir"
-tar -xzf "$remote_archive" -C "$release_dir"
-cp "$REMOTE_ENV" "$release_dir/.env"
-ln -sfn "$release_dir" "$current_dir"
+if ! mkdir -p "$release_dir" 2>/tmp/mkdir_err.$$; then
+    if sudo -n mkdir -p "$release_dir" 2>/dev/null && sudo -n chown -R "$(id -un):$(id -gn)" "$root_dir" 2>/dev/null; then
+        echo "[remote] $root_dir needed sudo to create; chowned to $(id -un)"
+    else
+        echo "[remote] ERROR: cannot create $release_dir ($(cat /tmp/mkdir_err.$$ 2>/dev/null))"
+        echo "[remote] Fix: sudo mkdir -p $root_dir && sudo chown -R \$USER:\$USER $root_dir"
+        echo "[remote]   or set PI5_DEST_DIR to a path this user already owns (e.g. \$HOME/car-calib-pi5)"
+        rm -f /tmp/mkdir_err.$$
+        exit 1
+    fi
+fi
+rm -f /tmp/mkdir_err.$$
+tar -xzf "$remote_archive" -C "$release_dir" || { echo "[remote] ERROR: extracting $remote_archive failed"; exit 1; }
+cp "$REMOTE_ENV" "$release_dir/.env" || { echo "[remote] ERROR: copying env file into release failed"; exit 1; }
+ln -sfn "$release_dir" "$current_dir" || { echo "[remote] ERROR: symlinking $current_dir failed"; exit 1; }
 rm -f "$remote_archive" "$REMOTE_ENV"
 
 echo "[remote] Docker compose..."
