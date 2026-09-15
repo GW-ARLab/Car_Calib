@@ -21,6 +21,11 @@
   <div class="layout">
     <div class="panel">
       <h2>Live stream</h2>
+      <div class="row" style="margin-top:0">
+        <select id="cameraSelect"><option value="">— scanning cameras —</option></select>
+        <button id="cameraRefresh" title="rescan camera indices">↻ scan</button>
+        <span class="muted" id="cameraLabel"></span>
+      </div>
       <div class="stream-wrap"><img id="stream" class="stream" alt="camera stream"></div>
       <h3>Status</h3>
       <div id="statusBar"></div>
@@ -165,6 +170,6 @@
       STATUS: "/api/status"
     };
   </script>
-  <script src="/dashboard/static/script.js?v=direct-20260709-tune-focus"></script>
+  <script src="/dashboard/static/script.js?v=direct-20260915-camera-select"></script>
 </body>
 </html>

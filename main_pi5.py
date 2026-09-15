@@ -559,22 +559,67 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Camera
     # ------------------------------------------------------------------ #
-    # Camera auto-detect: keep trying until we get one
-    def acquire_camera() -> cv2.VideoCapture:
+    # Shared with the dashboard's camera-select combo box (runtime/dashboard):
+    # "current" is the index actually open right now, "requested" is set by
+    # _camera_select_handler and picked up at the top of the next loop tick.
+    camera_state: dict[str, int] = {"current": args.camera, "requested": args.camera}
+    camera_lock = threading.Lock()
+
+    # Camera auto-detect: keep trying until we get one, preferring `preferred`.
+    def acquire_camera(preferred: int) -> cv2.VideoCapture:
         while True:
-            candidates = [args.camera] + [i for i in range(10) if i != args.camera]
+            candidates = [preferred] + [i for i in range(10) if i != preferred]
             for idx in candidates:
                 test = cv2.VideoCapture(idx)
                 if test.isOpened():
                     logger.info("Camera opened at index %d", idx)
                     test.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                     test.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    with camera_lock:
+                        camera_state["current"] = idx
+                        camera_state["requested"] = idx
                     return test
                 test.release()
             logger.warning("No camera found across %s, retrying in 0.5s...", candidates)
             time.sleep(0.5)
 
-    cap = acquire_camera()
+    def scan_cameras() -> dict[str, Any]:
+        """Probe /dev/videoN indices for the dashboard's camera combo box.
+
+        The index currently held open by the main loop can't be reopened
+        here (V4L2 refuses a second concurrent handle), so it is reported
+        as available without probing it.
+        """
+        with camera_lock:
+            current = camera_state["current"]
+        available: list[int] = []
+        for idx in range(10):
+            if idx == current:
+                available.append(idx)
+                continue
+            test = cv2.VideoCapture(idx)
+            if test.isOpened():
+                available.append(idx)
+            test.release()
+        return {"cameras": available, "current": current}
+
+    def select_camera(body: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(body)
+            index = int(payload["index"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise ScriptValidationError("camera index must be an integer") from exc
+        if not 0 <= index < 64:
+            raise ScriptValidationError("camera index out of range")
+        with camera_lock:
+            camera_state["requested"] = index
+        logger.info("Camera switch to index %d requested via dashboard", index)
+        return {"ok": True, "requested": index}
+
+    if http is not None:
+        http.set_camera_handlers(list_getter=scan_cameras, selector=select_camera)
+
+    cap = acquire_camera(args.camera)
 
     # ------------------------------------------------------------------ #
     # Main loop
@@ -589,6 +634,18 @@ def main() -> None:
             loop_start = time.monotonic()
             frame_num += 1
 
+            with camera_lock:
+                requested_idx = camera_state["requested"]
+                current_idx = camera_state["current"]
+            if requested_idx != current_idx:
+                logger.info("Switching camera %d -> %d (dashboard request)", current_idx, requested_idx)
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                _base_handler("STOP")
+                cap = acquire_camera(requested_idx)
+
             ret, frame = cap.read()
             if not ret or frame is None:
                 logger.warning("Frame %d capture failed, re-acquiring camera...", frame_num)
@@ -597,7 +654,7 @@ def main() -> None:
                 except Exception:
                     pass
                 _base_handler("STOP")
-                cap = acquire_camera()
+                cap = acquire_camera(camera_state["current"])
                 time.sleep(0.1)
                 continue
 

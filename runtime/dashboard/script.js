@@ -222,6 +222,63 @@ async function sendPower(on) {
 document.getElementById("powerOnBtn").onclick = () => sendPower(true);
 document.getElementById("powerOffBtn").onclick = () => sendPower(false);
 
+// §3b ── Camera select combo box ────────────────────────────────────────
+const cameraSelect = document.getElementById("cameraSelect");
+const cameraLabel = document.getElementById("cameraLabel");
+let cameraBusy = false;
+
+async function refreshCameraList() {
+  try {
+    const r = await fetch("/api/camera/list" + qp);
+    if (!r.ok) {
+      cameraLabel.textContent = "camera scan error: " + r.status;
+      return;
+    }
+    const data = await r.json();
+    const cameras = data.cameras || [];
+    cameraSelect.innerHTML = "";
+    if (cameras.length === 0) {
+      cameraSelect.appendChild(new Option("no camera found", ""));
+      cameraLabel.textContent = "";
+      return;
+    }
+    for (const idx of cameras) {
+      cameraSelect.appendChild(new Option("camera " + idx + " (/dev/video" + idx + ")", idx));
+    }
+    cameraSelect.value = String(data.current);
+    cameraLabel.textContent = "active: /dev/video" + data.current;
+  } catch (e) {
+    cameraLabel.textContent = "camera scan error: network";
+  }
+}
+
+async function selectCamera(index) {
+  if (cameraBusy) return;
+  cameraBusy = true;
+  cameraLabel.textContent = "switching…";
+  try {
+    const r = await fetch("/api/camera/select" + qp, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({index: Number(index)}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      cameraLabel.textContent = "camera error: " + (j.detail || r.status);
+      return;
+    }
+    cameraLabel.textContent = "switching to /dev/video" + index + "…";
+  } catch (e) {
+    cameraLabel.textContent = "camera error: network";
+  } finally {
+    cameraBusy = false;
+  }
+}
+
+cameraSelect.onchange = (e) => selectCamera(e.target.value);
+document.getElementById("cameraRefresh").onclick = refreshCameraList;
+refreshCameraList();
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }

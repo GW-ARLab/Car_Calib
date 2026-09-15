@@ -8,6 +8,8 @@ Serves:
   /api/base/<cmd>       → base motor command
   /api/relay/<state>    → relay ON/OFF
   /api/power/<state>    → power ON/OFF
+  /api/camera/list      → GET  scan available /dev/videoN indices
+  /api/camera/select    → POST {"index": N} switch active camera
 """
 
 from __future__ import annotations
@@ -207,6 +209,15 @@ class _RequestHandler(BaseHTTPRequestHandler):
             self._json(getter())
             return
 
+        # ---- API /camera/list ----
+        if path == "/api/camera/list":
+            getter = getattr(self.server, "camera_list_getter", None)
+            if not callable(getter):
+                self._json({"detail": "camera list unavailable"}, 404)
+                return
+            self._json(getter())
+            return
+
         # ---- API /base/<cmd> ----
         if path.startswith("/api/base/"):
             cmd = path.split("/api/base/")[-1]
@@ -299,6 +310,16 @@ class _RequestHandler(BaseHTTPRequestHandler):
             try:
                 self._json(handler(self._json_body()))
             except (json.JSONDecodeError, ManualOverrideError) as exc:
+                self._json({"detail": str(exc)}, 400)
+            return
+        if path == "/api/camera/select":
+            selector = getattr(self.server, "camera_selector", None)
+            if not callable(selector):
+                self._json({"detail": "camera select unavailable"}, 404)
+                return
+            try:
+                self._json(selector(json.dumps(self._json_body())))
+            except ValueError as exc:
                 self._json({"detail": str(exc)}, 400)
             return
         if path == "/route/script":
@@ -509,6 +530,8 @@ class Pi5HttpServer:
         self._tune_saver: Callable[[], dict[str, Any]] | None = None
         self._tune_resetter: Callable[[str], dict[str, Any]] | None = None
         self._manual_override_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self._camera_list_getter: Callable[[], dict[str, Any]] | None = None
+        self._camera_selector: Callable[[str], dict[str, Any]] | None = None
         self._thread: threading.Thread | None = None
 
     def set_frame_getter(self, fn: Callable[[], np.ndarray | None]) -> None:
@@ -531,6 +554,15 @@ class Pi5HttpServer:
 
     def set_manual_override_handler(self, fn: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
         self._manual_override_handler = fn
+
+    def set_camera_handlers(
+        self,
+        *,
+        list_getter: Callable[[], dict[str, Any]],
+        selector: Callable[[str], dict[str, Any]],
+    ) -> None:
+        self._camera_list_getter = list_getter
+        self._camera_selector = selector
 
     def set_script_runner(self, fn: Callable[[], dict[str, Any]]) -> None:
         self._script_runner = fn
@@ -601,6 +633,8 @@ class Pi5HttpServer:
         self._server.relay_handler = self._relay_handler
         self._server.power_handler = self._power_handler
         self._server.manual_override_handler = self._manual_override_handler
+        self._server.camera_list_getter = self._camera_list_getter
+        self._server.camera_selector = self._camera_selector
         self._server.script_runner = self._script_runner
         self._server.script_stopper = self._script_stopper
         self._server.script_submitter = self._script_submitter
