@@ -24,11 +24,16 @@ services:
     network_mode: host
     # Docker refuses to start the container if ANY listed device path is
     # missing on the host -- only list /dev/videoN nodes that actually
-    # exist (`ls /dev/video*` on the Pi5). main_pi5.py's acquire_camera()
-    # scans indices at runtime, but only devices mapped in here are even
-    # visible inside the container.
+    # exist (`ls /dev/video*` on the Pi5). main_pi5.py's scan_cameras()/
+    # acquire_camera() see indices at runtime, but only devices mapped in
+    # here are even visible inside the container. Pi5's camera stack
+    # (rp1-cfe/libcamera) exposes many extra ISP/metadata nodes per
+    # sensor (e.g. video19-35) that are not separate cameras and are not
+    # needed for OpenCV capture -- only the two actual capture nodes are
+    # mapped here.
     devices:
       - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
     volumes:
       - ./logs:/data/logs
       - ./routes:/data/routes
