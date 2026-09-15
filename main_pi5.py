@@ -708,6 +708,11 @@ def main() -> None:
             if manual_decision.release_servo and not manual_decision.active:
                 if last_base_cmd.upper() != "STOP":
                     _base_handler("STOP")
+                # Releasing the joystick only stops the base -- nothing else
+                # here recenters the steering, so the last manual angle was
+                # left published forever (wheels stayed turned after
+                # release). Explicitly recenter on release.
+                _servo_handler(manual_override.config.center_angle)
                 last_manual_servo_angle = None
 
             if script_runner is not None:
