@@ -584,16 +584,32 @@ def main() -> None:
             time.sleep(0.5)
 
     def scan_cameras() -> dict[str, Any]:
-        """Probe /dev/videoN indices for the dashboard's camera combo box.
+        """Probe every /dev/videoN node for the dashboard's camera combo box.
 
         The index currently held open by the main loop can't be reopened
         here (V4L2 refuses a second concurrent handle), so it is reported
-        as available without probing it.
+        as available without probing it. Candidate indices come from
+        globbing /dev/video* (covers gaps and indices beyond a fixed
+        range, e.g. multiple physical cameras or metadata-only nodes
+        interleaved with capture nodes) rather than a hardcoded range;
+        falls back to a plain range(10) scan on platforms without
+        /dev/videoN (e.g. local dev on Windows).
         """
+        import glob
+
         with camera_lock:
             current = camera_state["current"]
+        node_paths = sorted(glob.glob("/dev/video*"))
+        candidate_indices: list[int] = []
+        for node in node_paths:
+            suffix = node.rsplit("video", 1)[-1]
+            if suffix.isdigit():
+                candidate_indices.append(int(suffix))
+        if not candidate_indices:
+            candidate_indices = list(range(10))
+
         available: list[int] = []
-        for idx in range(10):
+        for idx in candidate_indices:
             if idx == current:
                 available.append(idx)
                 continue
@@ -601,7 +617,7 @@ def main() -> None:
             if test.isOpened():
                 available.append(idx)
             test.release()
-        return {"cameras": available, "current": current}
+        return {"cameras": sorted(available), "current": current}
 
     def select_camera(body: str) -> dict[str, Any]:
         try:
