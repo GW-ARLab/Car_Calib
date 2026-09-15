@@ -137,10 +137,12 @@ def map_calibrated_servo(
 
     # Map ratio ra góc servo thật
     calib_deg = input_cmd - 90
+    if reverse:
+        calib_deg = -calib_deg
     # Cap error nếu vượt quá limit
     if abs(calib_deg) > limit_deg:
         calib_deg = limit_deg if calib_deg > 0 else -limit_deg
-        
+
     servo_cmd = home_cmd + calib_deg
 
     # Due to hardware limitation of servo, we need to add some offset to avoid hitting the physical limit
