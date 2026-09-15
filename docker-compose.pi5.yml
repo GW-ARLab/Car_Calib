@@ -34,9 +34,18 @@ services:
     devices:
       - /dev/video0:/dev/video0
       - /dev/video1:/dev/video1
+      - /dev/video2:/dev/video2
+      - /dev/video3:/dev/video3
+    # Absolute paths anchored at PI5_DEST_DIR, NOT relative to this compose
+    # file's directory: deploy_pi5_remote.sh runs compose from
+    # $PI5_DEST_DIR/current, a symlink re-pointed at a brand-new
+    # releases/<version> directory on every deploy. A relative `./logs`
+    # bind mount would resolve inside that versioned directory and reset
+    # to empty on every deploy/reboot (old data left behind in the old
+    # release dir, later pruned by the keep-3-releases cleanup).
     volumes:
-      - ./logs:/data/logs
-      - ./routes:/data/routes
+      - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/logs:/data/logs
+      - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/routes:/data/routes
     pids_limit: 128
     logging:
       driver: json-file

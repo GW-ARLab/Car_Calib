@@ -284,7 +284,7 @@ if ! sudo -n true 2>/dev/null; then
 fi
 
 echo "[remote] Extracting release..."
-sudo mkdir -p "$release_dir" || { echo "[remote] ERROR: mkdir $release_dir failed"; exit 1; }
+sudo mkdir -p "$release_dir" "$root_dir/data/logs" "$root_dir/data/routes" || { echo "[remote] ERROR: mkdir failed"; exit 1; }
 sudo chown -R "$(id -un):$(id -gn)" "$root_dir" || { echo "[remote] ERROR: chown $root_dir failed"; exit 1; }
 tar -xzf "$remote_archive" -C "$release_dir" || { echo "[remote] ERROR: extracting $remote_archive failed"; exit 1; }
 cp "$REMOTE_ENV" "$release_dir/.env" || { echo "[remote] ERROR: copying env file into release failed"; exit 1; }
