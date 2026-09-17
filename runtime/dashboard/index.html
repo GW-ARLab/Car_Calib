@@ -54,6 +54,8 @@
         </select>
         <input id="duration" type="number" min="0" step="0.5" value="2">
         <span class="muted">seconds</span>
+        <input id="actionDistance" type="number" min="0" step="any" placeholder="distance (m)" style="max-width:130px">
+        <span class="muted" id="avgSpeedLabel"></span>
         <button id="add">+ add step</button>
         <button id="cancelEdit" style="display:none">cancel edit</button>
         <button id="clear">clear all</button>
@@ -133,18 +135,35 @@
       <select id="routeSort" title="sort">
         <option value="recent">Recent</option>
         <option value="longest">Longest elapsed</option>
-        <option value="frames">Most frames</option>
+        <option value="distance">Longest distance</option>
       </select>
       <input id="routeSearch" type="text" placeholder="search route_id…" style="flex:1;min-width:140px">
       <button id="refreshRoutes">↻</button>
       <button id="compareSelected" style="padding:9px 14px;font-size:13px" disabled>⊟ compare</button>
+      <button id="exportSelected" style="padding:9px 14px;font-size:13px">⬇ export csv (xlsx)</button>
+      <button id="downloadAllSelected" style="padding:9px 14px;font-size:13px">⬇ download all (zip)</button>
       <button id="deleteSelected" class="danger" style="padding:9px 14px;font-size:13px" disabled>🗑 selected</button>
       <button id="deleteAllRoutes" class="danger" style="padding:9px 14px;font-size:13px">🗑 all</button>
     </div>
     <table id="routesTable">
-      <thead><tr><th style="width:24px"><input type="checkbox" id="routeSelectAll"></th><th>Route ID</th><th>Mode</th><th>Preset</th><th>Status</th><th>Frames</th><th>Elapsed</th><th>Zip size</th><th>Ended (UTC)</th><th></th></tr></thead>
+      <thead><tr><th style="width:24px"><input type="checkbox" id="routeSelectAll"></th><th>Route ID</th><th>Mode</th><th>Preset</th><th>Status</th><th>Distance</th><th>Elapsed</th><th>Zip size</th><th>Ended (UTC)</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+  </div>
+  <div id="distanceModal" class="modal-bg">
+    <div class="modal">
+      <h2>✅ Route đã hoàn thành</h2>
+      <p>Vui lòng nhập quãng đường xe đã đi.</p>
+      <p class="muted" id="distanceRouteLabel"></p>
+      <div class="row">
+        <input id="distanceInput" type="number" min="0" step="any" placeholder="0" style="flex:1">
+        <span class="muted">mét</span>
+      </div>
+      <div class="modal-actions" style="margin-top:14px">
+        <button id="distanceSkip">bỏ qua</button>
+        <button id="distanceSave" class="primary">lưu</button>
+      </div>
+    </div>
   </div>
   <div id="summaryModal" class="modal-bg">
     <div class="modal">
@@ -170,6 +189,6 @@
       STATUS: "/api/status"
     };
   </script>
-  <script src="/dashboard/static/script.js?v=direct-20260915-camera-select"></script>
+  <script src="/dashboard/static/script.js?v=direct-20260916-download-all-zip"></script>
 </body>
 </html>

@@ -33,6 +33,8 @@ const progressBar = document.getElementById("progressBar");
 const progressSegments = document.getElementById("progressSegments");
 const actionInput = document.getElementById("action");
 const durationInput = document.getElementById("duration");
+const actionDistanceInput = document.getElementById("actionDistance");
+const avgSpeedLabel = document.getElementById("avgSpeedLabel");
 const addBtn = document.getElementById("add");
 const cancelEditBtn = document.getElementById("cancelEdit");
 const manualJoystick = document.getElementById("manualJoystick");
@@ -47,6 +49,37 @@ let manualPointerId = null;
 let manualDrive = 0;
 let manualSteer = 0;
 let manualHeartbeat = null;
+
+// Lets the operator type a target distance (meters) instead of guessing a
+// duration by hand -- duration = distance / avg speed measured from past
+// completed routes' manually-entered distance_m (see compute_average_speed_mps).
+let _avgSpeedMps = null;
+let _speedInterceptM = 0;
+async function refreshAvgSpeed() {
+  try {
+    const r = await fetch("/routes/avg_speed" + qp);
+    if (!r.ok) return;
+    const j = await r.json();
+    _avgSpeedMps = j.avg_speed_mps;
+    _speedInterceptM = j.intercept_m || 0;
+    if (avgSpeedLabel) {
+      avgSpeedLabel.textContent = _avgSpeedMps
+        ? `TB: ${_avgSpeedMps.toFixed(3)} m/s (${j.n_samples} route)`
+        : "chưa đủ dữ liệu tốc độ";
+    }
+  } catch (e) {}
+}
+if (actionDistanceInput) actionDistanceInput.addEventListener("input", () => {
+  const distance = parseFloat(actionDistanceInput.value);
+  if (!Number.isFinite(distance) || distance <= 0 || !_avgSpeedMps) return;
+  // duration = (distance - startup_offset) / speed -- accounts for the
+  // roughly-constant distance lost accelerating before reaching cruise
+  // speed, which a flat distance/speed division was undershooting by a
+  // few cm on short steps (see compute_average_speed_mps docstring).
+  const duration = (distance - _speedInterceptM) / _avgSpeedMps;
+  durationInput.value = Math.max(0, duration).toFixed(1);
+});
+refreshAvgSpeed();
 
 function resetEditor() {
   editingIndex = -1;
@@ -588,8 +621,48 @@ function renderEventLog() {
     </div>`;
 }
 
+function showDistanceModal(routeId) {
+  if (!routeId) return;
+  const label = document.getElementById("distanceRouteLabel");
+  const input = document.getElementById("distanceInput");
+  if (label) label.textContent = routeId;
+  if (input) input.value = "";
+  document.getElementById("distanceModal").classList.add("show");
+  document.getElementById("distanceModal").dataset.routeId = routeId;
+}
+
+function hideDistanceModal() {
+  document.getElementById("distanceModal").classList.remove("show");
+}
+
+async function saveDistance() {
+  const modal = document.getElementById("distanceModal");
+  const routeId = modal.dataset.routeId;
+  if (!routeId) { hideDistanceModal(); return; }
+  const raw = document.getElementById("distanceInput").value;
+  const distance_m = raw === "" ? 0 : Number(raw);
+  try {
+    await fetch("/routes/" + encodeURIComponent(routeId) + "/distance" + qp, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({distance_m: Number.isFinite(distance_m) ? distance_m : 0})
+    });
+  } catch (e) {}
+  hideDistanceModal();
+  refreshRoutes();
+  refreshAvgSpeed();
+}
+
+document.getElementById("distanceSave").onclick = saveDistance;
+document.getElementById("distanceSkip").onclick = hideDistanceModal;
+document.getElementById("distanceModal").addEventListener("click", (e) => {
+  if (e.target.id === "distanceModal") hideDistanceModal();
+});
+
 let lastRouteId;
 let _polling = false;
+let _knownRouteIds = null;
+const _promptedRouteIds = new Set();
 async function pollStatus() {
   if (document.hidden) return;  // skip polling while tab is backgrounded
   if (_polling) return;         // guard: don't stack requests if a poll is slow
@@ -708,8 +781,33 @@ async function refreshRoutes() {
     if (!r.ok) return;
     const j = await r.json();
     _routesAll = j.routes || [];
+    detectFinishedRoute(_routesAll);
     renderRoutes();
   } catch (e) {}
+}
+
+// Fires the distance-entry modal when a route's status transitions from
+// "not_recorded" (its directory exists but route_summary.json hasn't been
+// written yet -- true from the moment the route STARTS, not just while it
+// runs) to an actual finished status. Tracking presence alone missed every
+// route that outlived one 5s poll cycle, since its id was already known
+// while it was still running.
+function detectFinishedRoute(routes) {
+  const nextStatus = new Map(routes.map(r => [r.route_id, r.status]));
+  if (_knownRouteIds === null) {
+    _knownRouteIds = nextStatus;
+    return;
+  }
+  for (const rr of routes) {
+    const prevStatus = _knownRouteIds.get(rr.route_id);
+    const wasFinished = !!prevStatus && prevStatus !== "not_recorded";
+    const isFinished = !!rr.status && rr.status !== "not_recorded";
+    if (isFinished && !wasFinished && !_promptedRouteIds.has(rr.route_id)) {
+      _promptedRouteIds.add(rr.route_id);
+      showDistanceModal(rr.route_id);
+    }
+  }
+  _knownRouteIds = nextStatus;
 }
 
 function renderRoutes() {
@@ -724,10 +822,10 @@ function renderRoutes() {
     tr.appendChild(makeTextCell(rr.route_mode || '-'));
     tr.appendChild(makePresetCell(rr));
     tr.appendChild(makeStatusCell(rr));
-    tr.appendChild(makeTextCell(rr.total_frames != null ? String(rr.total_frames) : '-'));
-    tr.appendChild(makeTextCell(fmtElapsed(rr.elapsed_s)));
+    tr.appendChild(makeTextCell(rr.distance_m != null ? Number(rr.distance_m).toFixed(3) + " m" : '-'));
+    tr.appendChild(makeTextCell(fmtElapsed(rr.elapsed)));
     tr.appendChild(makeTextCell(fmtBytes(rr.zip_size)));
-    tr.appendChild(makeTextCell(fmtTs(rr.end_timestamp_utc)));
+    tr.appendChild(makeTextCell(fmtTs(rr.ended_utc)));
     tr.appendChild(makeActionsCell(rr));
     routesTbody.appendChild(tr);
   });
@@ -751,10 +849,10 @@ function makeCheckCell(routeId) {
 }
 function makePresetCell(rr) {
   const td = document.createElement("td");
-  if (rr.preset_name) {
+  if (rr.preset) {
     const span = document.createElement("span");
     span.className = "badge badge-ok";
-    span.textContent = rr.preset_name;
+    span.textContent = rr.preset;
     td.appendChild(span);
   } else if (rr.script_source) {
     const span = document.createElement("span");
@@ -808,9 +906,9 @@ function applyRouteFilters(list) {
   const q = (routeSearchInput && routeSearchInput.value || "").trim().toLowerCase();
   if (q) out = out.filter(r => (r.route_id || "").toLowerCase().includes(q));
   const sort = routeSortSel ? routeSortSel.value : "recent";
-  if (sort === "longest") out.sort((a, b) => (b.elapsed_s || 0) - (a.elapsed_s || 0));
-  else if (sort === "frames") out.sort((a, b) => (b.total_frames || 0) - (a.total_frames || 0));
-  else out.sort((a, b) => (b.end_timestamp_utc || "").localeCompare(a.end_timestamp_utc || ""));
+  if (sort === "longest") out.sort((a, b) => (b.elapsed || 0) - (a.elapsed || 0));
+  else if (sort === "distance") out.sort((a, b) => (b.distance_m || 0) - (a.distance_m || 0));
+  else out.sort((a, b) => (b.ended_utc || "").localeCompare(a.ended_utc || ""));
   return out;
 }
 
@@ -847,6 +945,20 @@ if (deleteSelectedBtn) deleteSelectedBtn.onclick = async () => {
   }
   _selectedRoutes.clear();
   refreshRoutes();
+};
+const exportSelectedBtn = document.getElementById("exportSelected");
+if (exportSelectedBtn) exportSelectedBtn.onclick = () => {
+  const ids = Array.from(_selectedRoutes);
+  const sep = qp ? "&" : "?";
+  const idsParam = ids.length ? sep + "ids=" + encodeURIComponent(ids.join(",")) : "";
+  window.location.href = "/routes/export.xlsx" + qp + idsParam;
+};
+const downloadAllBtn = document.getElementById("downloadAllSelected");
+if (downloadAllBtn) downloadAllBtn.onclick = () => {
+  const ids = Array.from(_selectedRoutes);
+  const sep = qp ? "&" : "?";
+  const idsParam = ids.length ? sep + "ids=" + encodeURIComponent(ids.join(",")) : "";
+  window.location.href = "/routes/download_all" + qp + idsParam;
 };
 document.getElementById("refreshRoutes").onclick = refreshRoutes;
 setInterval(refreshRoutes, 5000);

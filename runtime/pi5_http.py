@@ -10,6 +10,10 @@ Serves:
   /api/power/<state>    → power ON/OFF
   /api/camera/list      → GET  scan available /dev/videoN indices
   /api/camera/select    → POST {"index": N} switch active camera
+  /routes/<id>/distance → POST {"distance_m": N} save manually-entered distance
+  /routes/export.xlsx   → GET  ?ids=a,b,c (or all routes) as one .xlsx, 1 sheet per route
+  /routes/avg_speed     → GET  {"avg_speed_mps": float|null, "n_samples": int}
+  /routes/download_all  → GET  ?ids=a,b,c (or all routes) as one .zip bundling each route's .zip
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import logging
 import mimetypes
 import os
 import socket
+import tempfile
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -27,6 +32,7 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
+from uuid import uuid4
 
 import numpy as np
 
@@ -71,6 +77,37 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(body.encode())
+
+    def _bytes(self, code: int, data: bytes, content_type: str, filename: str) -> None:
+        self.send_response(code)
+        self._cors()
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _stream_download(self, path: Path, filename: str, *, content_type: str = "application/zip", cleanup: bool = False) -> None:
+        """Stream a file from disk as an attachment, in chunks (not loaded into memory)."""
+        if not path.is_file():
+            self._text(404, "not found")
+            return
+        try:
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with path.open("rb") as fileobj:
+                while chunk := fileobj.read(64 * 1024):
+                    self.wfile.write(chunk)
+        finally:
+            if cleanup:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _authorized(self) -> bool:
         token = str(getattr(self.server, "dashboard_token", ""))
@@ -280,6 +317,49 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 return
             self._json({"summary": json.loads(summary_path.read_text(encoding="utf-8"))})
             return
+        if path == "/routes/download_all":
+            ids_param = (self._query().get("ids") or [""])[0]
+            route_ids = [r for r in ids_param.split(",") if r] or None
+            bundler = getattr(self.server, "routes_zip_bundler", None)
+            if not callable(bundler):
+                self._json({"detail": "route bundle unavailable"}, 404)
+                return
+            tmp_path = Path(tempfile.gettempdir()) / f"routes_bundle_{uuid4().hex}.zip"
+            try:
+                count = bundler(route_ids, tmp_path)
+            except OSError as exc:
+                tmp_path.unlink(missing_ok=True)
+                self._json({"detail": str(exc)}, 500)
+                return
+            if count == 0:
+                tmp_path.unlink(missing_ok=True)
+                self._json({"detail": "no finished routes to bundle"}, 404)
+                return
+            self._stream_download(tmp_path, "routes_bundle.zip", cleanup=True)
+            return
+        if path == "/routes/avg_speed":
+            getter = getattr(self.server, "avg_speed_getter", None)
+            self._json(getter() if callable(getter) else {"avg_speed_mps": None, "n_samples": 0})
+            return
+        if path == "/routes/export.xlsx":
+            ids_param = (self._query().get("ids") or [""])[0]
+            route_ids = [r for r in ids_param.split(",") if r] or None
+            exporter = getattr(self.server, "routes_xlsx_exporter", None)
+            if not callable(exporter):
+                self._json({"detail": "route export unavailable"}, 404)
+                return
+            try:
+                data = exporter(route_ids)
+            except FileNotFoundError as exc:
+                self._json({"detail": f"route not found: {exc}"}, 404)
+                return
+            self._bytes(
+                200,
+                data,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "routes_export.xlsx",
+            )
+            return
         if path.startswith("/routes/download/"):
             route_id = unquote(path[len("/routes/download/"):])
             root = Path(os.getenv("ROUTE_LOG_ROOT", "/data/routes")).resolve()
@@ -365,8 +445,31 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if path == "/control/estop_reset":
             self._json({"ok": True})
             return
+        if path.startswith("/routes/") and path.endswith("/distance"):
+            route_id = unquote(path[len("/routes/"):-len("/distance")])
+            handler = getattr(self.server, "route_distance_handler", None)
+            if not callable(handler):
+                self._json({"detail": "route distance unavailable"}, 404)
+                return
+            body = self._json_body()
+            try:
+                result = handler(route_id, body.get("distance_m"))
+            except FileNotFoundError:
+                self._json({"detail": "route not found"}, 404)
+                return
+            except ValueError as exc:
+                self._json({"detail": str(exc)}, 400)
+                return
+            self._json(result)
+            return
         if path == "/routes/delete_all":
-            self._json({"removed": 0, "errors": []})
+            deleter = getattr(self.server, "routes_delete_all_handler", None)
+            if not callable(deleter):
+                self._json({"removed": 0, "errors": ["route delete unavailable"]})
+                return
+            result = deleter()
+            self.server.route_list_cache = None
+            self._json(result)
             return
         if path == "/api/tune/save":
             saver = getattr(self.server, "tune_saver", None)
@@ -441,6 +544,17 @@ class _RequestHandler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
         if path.startswith("/routes/"):
+            route_id = unquote(path[len("/routes/"):])
+            deleter = getattr(self.server, "route_deleter", None)
+            if not callable(deleter):
+                self._json({"detail": "route delete unavailable"}, 404)
+                return
+            try:
+                deleter(route_id)
+            except FileNotFoundError:
+                self._json({"detail": "route not found"}, 404)
+                return
+            self.server.route_list_cache = None
             self._json({"ok": True})
             return
         self._text(404, "not found")
@@ -525,6 +639,12 @@ class Pi5HttpServer:
         self._presets_setter: Callable[[str], None] | None = None
         self._preset_deleter: Callable[[str], None] | None = None
         self._routes_getter: Callable[[], list[dict[str, Any]]] | None = None
+        self._route_distance_handler: Callable[[str, Any], dict[str, Any]] | None = None
+        self._route_deleter: Callable[[str], None] | None = None
+        self._routes_delete_all_handler: Callable[[], dict[str, Any]] | None = None
+        self._routes_xlsx_exporter: Callable[[list[str] | None], bytes] | None = None
+        self._avg_speed_getter: Callable[[], dict[str, Any]] | None = None
+        self._routes_zip_bundler: Callable[[list[str] | None, Path], int] | None = None
         self._tune_getter: Callable[[], dict[str, Any]] | None = None
         self._tune_applier: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self._tune_saver: Callable[[], dict[str, Any]] | None = None
@@ -591,6 +711,24 @@ class Pi5HttpServer:
     def set_routes_getter(self, fn: Callable[[], list[dict[str, Any]]]) -> None:
         self._routes_getter = fn
 
+    def set_route_distance_handler(self, fn: Callable[[str, Any], dict[str, Any]]) -> None:
+        self._route_distance_handler = fn
+
+    def set_route_deleter(self, fn: Callable[[str], None]) -> None:
+        self._route_deleter = fn
+
+    def set_routes_delete_all_handler(self, fn: Callable[[], dict[str, Any]]) -> None:
+        self._routes_delete_all_handler = fn
+
+    def set_routes_xlsx_exporter(self, fn: Callable[[list[str] | None], bytes]) -> None:
+        self._routes_xlsx_exporter = fn
+
+    def set_avg_speed_getter(self, fn: Callable[[], dict[str, Any]]) -> None:
+        self._avg_speed_getter = fn
+
+    def set_routes_zip_bundler(self, fn: Callable[[list[str] | None, Path], int]) -> None:
+        self._routes_zip_bundler = fn
+
     def set_tune_handlers(
         self,
         *,
@@ -644,6 +782,12 @@ class Pi5HttpServer:
         self._server.presets_setter = self._presets_setter
         self._server.preset_deleter = self._preset_deleter
         self._server.routes_getter = self._routes_getter
+        self._server.route_distance_handler = self._route_distance_handler
+        self._server.route_deleter = self._route_deleter
+        self._server.routes_delete_all_handler = self._routes_delete_all_handler
+        self._server.routes_xlsx_exporter = self._routes_xlsx_exporter
+        self._server.avg_speed_getter = self._avg_speed_getter
+        self._server.routes_zip_bundler = self._routes_zip_bundler
         self._server.tune_getter = self._tune_getter
         self._server.tune_applier = self._tune_applier
         self._server.tune_saver = self._tune_saver

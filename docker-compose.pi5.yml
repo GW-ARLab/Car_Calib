@@ -46,6 +46,7 @@ services:
     volumes:
       - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/logs:/data/logs
       - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/routes:/data/routes
+      - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/models:/data/models:ro
     pids_limit: 128
     logging:
       driver: json-file
@@ -73,7 +74,25 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME:-}
       - MQTT_PASSWORD=${MQTT_PASSWORD:-}
       - MQTT_RASPI5_CONTROL_TOPIC=${MQTT_RASPI5_CONTROL_TOPIC:-car/raspi5/control}
+      - MQTT_TRIGGER_TOPIC=${MQTT_TRIGGER_TOPIC:-car/control/trigger}
       - MANUAL_OVERRIDE_ENABLED=${MANUAL_OVERRIDE_ENABLED:-true}
+      # Object detection safety pause (vision-side; Pi5 publishes STOP over
+      # MQTT instead of a GPIO gate). Disabled by default -- needs an ONNX
+      # model mounted at /data/models before turning this on.
+      - OBJECT_DETECTION_ENABLED=${OBJECT_DETECTION_ENABLED:-false}
+      - OBJECT_DETECTION_MODEL=${OBJECT_DETECTION_MODEL:-/data/models/yolov8n.onnx}
+      - OBJECT_DETECTION_LABELS=${OBJECT_DETECTION_LABELS:-/data/models/coco.names}
+      - OBJECT_DETECTION_CONF=${OBJECT_DETECTION_CONF:-0.5}
+      - OBJECT_DETECTION_INPUT_SIZE=${OBJECT_DETECTION_INPUT_SIZE:-640x640}
+      - OBJECT_DETECTION_ASYNC=${OBJECT_DETECTION_ASYNC:-true}
+      - OBJECT_DETECTION_INTERVAL_S=${OBJECT_DETECTION_INTERVAL_S:-0.2}
+      - OBJECT_NEAR_ROI=${OBJECT_NEAR_ROI:-lower_center}
+      - OBJECT_NEAR_AREA_RATIO=${OBJECT_NEAR_AREA_RATIO:-0.03}
+      - OBJECT_DETECT_HOLD_S=${OBJECT_DETECT_HOLD_S:-0.1}
+      - OBJECT_CLEAR_HOLD_S=${OBJECT_CLEAR_HOLD_S:-0.5}
+      - OBJECT_STOP_ON_ANY_DETECTION=${OBJECT_STOP_ON_ANY_DETECTION:-true}
+      - OBJECT_STOP_ON_PERSON=${OBJECT_STOP_ON_PERSON:-true}
+      - OBJECT_PERSON_LABEL=${OBJECT_PERSON_LABEL:-person}
       # Vision
       - ROI_HEIGHT_PCT=${ROI_HEIGHT_PCT:-0.6}
       - VISION_CANNY_LOW=${VISION_CANNY_LOW:-50}

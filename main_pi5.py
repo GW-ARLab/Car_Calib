@@ -46,10 +46,19 @@ from config.settings import (
 from drivers.mqtt_control_publisher import Raspi5MqttPublisher
 from models.robot_state import RobotState, FSMState
 from runtime.pi5_http import Pi5HttpServer
-from runtime.route_logging import RouteSession
+from runtime.route_logging import (
+    RouteSession,
+    bundle_routes_zip,
+    compute_average_speed_mps,
+    delete_all_routes,
+    delete_route,
+    export_routes_xlsx,
+    update_route_distance,
+)
 from runtime.pi5_script_runner import Pi5ScriptRunner
 from runtime.calib_tuning import CalibTuneManager
 from runtime.manual_override import ManualOverrideController
+from runtime.object_detection import ObjectDetectionStatus, ObjectDetector, draw_object_boxes
 from runtime.dashboard_stream import DashboardStreamBroker
 from runtime.resource_limits import ScriptValidationError, StorageManager, validate_route_steps
 from unified_calibration_components import UnifiedCalibrator, CalibrationProcessingError
@@ -176,6 +185,7 @@ def _scan_routes() -> list[dict[str, Any]]:
             "preset": "",
             "status": "not_recorded",
             "frames": 0,
+            "distance_m": None,
             "elapsed": 0.0,
             "zip_size": None,
             "has_zip": False,
@@ -190,6 +200,7 @@ def _scan_routes() -> list[dict[str, Any]]:
                     "preset": s.get("preset_name", ""),
                     "status": s.get("status", "not_recorded"),
                     "frames": s.get("total_frames", 0),
+                    "distance_m": s.get("distance_m"),
                     "elapsed": float(s.get("total_elapsed_seconds", 0.0)),
                     "accepted": s.get("accepted"),
                     "ended_utc": s.get("end_timestamp_utc", ""),
@@ -203,6 +214,24 @@ def _scan_routes() -> list[dict[str, Any]]:
             info["zip_size"] = zip_path.stat().st_size
         routes.append(info)
     return routes
+
+
+def _route_distance_handler(route_id: str, distance_m: Any) -> dict[str, Any]:
+    """Save a manually-entered distance (meters) into a finished route's zip.
+
+    Blank/None from the dashboard modal means "save as 0", not "leave unset".
+    """
+    if distance_m in (None, ""):
+        value = 0.0
+    else:
+        try:
+            value = float(distance_m)
+        except (TypeError, ValueError):
+            raise ValueError("distance_m must be a number")
+    if value < 0:
+        raise ValueError("distance_m must be >= 0")
+    summary = update_route_distance(route_id, value)
+    return {"ok": True, "route_id": route_id, "distance_m": value, "summary": summary}
 
 
 def main() -> None:
@@ -342,9 +371,10 @@ def main() -> None:
         mqtt_publisher.publish_relay(state.upper())
 
     def _power_handler(state: str) -> None:
-        # No confirmed MQTT topic for the power relay on the Pi4/ESP32 side
-        # yet -- log only so the dashboard button doesn't silently no-op.
-        logger.warning("Power relay control (%s) is not wired to MQTT yet", state)
+        # car/control/trigger (DataProcessingCenter) is a momentary pulse with
+        # no on/off distinction of its own -- both "bat xe"/"tat xe" buttons
+        # fire the same trigger; state is only used for the dashboard label.
+        mqtt_publisher.publish_trigger()
 
     # ------------------------------------------------------------------ #
     # HTTP Dashboard
@@ -390,6 +420,11 @@ def main() -> None:
         center_angle=90.0 + _env_float(("SERVO_CENTER_ANGLE",), -8.0),
         max_steer=_env_float(("MAX_STEERING_OFFSET",), 60.0),
     )
+    # Disabled unless OBJECT_DETECTION_ENABLED=true -- Pi5 has no direct
+    # actuators to gate anymore, but it IS the thing publishing MQTT drive
+    # commands, so on a critical detection it can simply publish STOP
+    # instead of the calibrated steering/drive command for that frame.
+    object_detector = ObjectDetector.from_env()
 
     if not args.no_dashboard:
         http = Pi5HttpServer(host=args.host, port=args.port)
@@ -466,6 +501,7 @@ def main() -> None:
                         route_session.attach_meta("video_file", "")
                         route_session.attach_meta("csv_file", "route_frames.csv")
                         route_session.attach_meta("sasc_file", "sasc_baseline_log.csv")
+                        route_session.attach_meta("calib_tune", tune_manager.status())
                         route_session.start(time.monotonic())
                         current_sasc_scene_type = preset_name
                         logger.info("Route recording started: %s", route_session.route_id)
@@ -487,6 +523,12 @@ def main() -> None:
         http.set_presets_setter(_set_preset)
         http.set_preset_deleter(_delete_preset)
         http.set_routes_getter(_scan_routes)
+        http.set_route_distance_handler(_route_distance_handler)
+        http.set_route_deleter(delete_route)
+        http.set_routes_delete_all_handler(delete_all_routes)
+        http.set_routes_xlsx_exporter(export_routes_xlsx)
+        http.set_avg_speed_getter(compute_average_speed_mps)
+        http.set_routes_zip_bundler(bundle_routes_zip)
         http.set_tune_handlers(
             getter=tune_manager.status,
             applier=tune_manager.apply,
@@ -699,12 +741,13 @@ def main() -> None:
             now = time.monotonic()
             script_running = script_runner is not None and script_runner.is_running()
 
-            # Object detection / ultrasonic safety gating removed on Pi5 --
-            # Pi5 has no actuators to gate; if this is still wanted, it
-            # belongs on the Pi4/ESP32 side that actually drives the car.
+            object_status = object_detector.process(frame, now=now)
+            display_frame = draw_object_boxes(display_frame, object_status.object_boxes)
+            safety_pause_active = object_status.object_pause_active
+
             manual_decision = manual_override.evaluate(
                 now=now,
-                object_near=False,
+                object_near=safety_pause_active or object_status.object_state == "near",
                 estop_active=False,
             )
             if manual_decision.release_servo and not manual_decision.active:
@@ -718,7 +761,14 @@ def main() -> None:
                 last_manual_servo_angle = None
 
             if script_runner is not None:
-                script_runner.set_paused(manual_decision.pause_script, "manual_override" if manual_decision.pause_script else "")
+                if manual_decision.pause_script:
+                    script_runner.set_paused(True, "manual_override")
+                else:
+                    script_runner.set_paused(safety_pause_active, "object_detected" if safety_pause_active else "")
+
+            if safety_pause_active and not manual_decision.active:
+                if last_base_cmd.upper() != "STOP":
+                    _base_handler("STOP")
 
             if manual_decision.active:
                 if not last_manual_active:
@@ -746,6 +796,7 @@ def main() -> None:
             )
             if (
                 not manual_decision.active
+                and not safety_pause_active
                 and script_runner is not None
                 and script_running
                 and script_runner.vision_pid_active()
@@ -818,6 +869,7 @@ def main() -> None:
                 "base": last_base_cmd,
             })
             tel.update(manual_decision.telemetry())
+            tel.update(object_status.telemetry())
             if route_session is not None:
                 mono_now = time.monotonic()
                 try:
@@ -875,6 +927,7 @@ def main() -> None:
         time.sleep(0.3)
         _base_handler("STOP")
         mqtt_publisher.close()
+        object_detector.close()
         cap.release()
         if http is not None:
             http.stop()

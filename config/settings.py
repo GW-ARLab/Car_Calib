@@ -221,6 +221,12 @@ MQTT_RASPI5_CONTROL_TOPIC = _get_str("MQTT_RASPI5_CONTROL_TOPIC", "car/raspi5/co
 # left in "controller" mode from a prior session doesn't silently drop
 # every command from vision.
 MQTT_CONTROL_MODE_TOPIC = _get_str("MQTT_CONTROL_MODE_TOPIC", "car/control/mode")
+# DataProcessingCenter (Pi4) power-relay trigger: a momentary pulse (fires
+# CMD_TYPE_TRIG over UART, auto-resets itself back to "0" ~300ms later).
+# Only accepts affirmative payloads ("1"/"true"/"pulse"/"trigger"/"on"); it
+# has no separate on/off duration -- both dashboard power buttons fire the
+# same pulse.
+MQTT_TRIGGER_TOPIC = _get_str("MQTT_TRIGGER_TOPIC", "car/control/trigger")
 
 # --------------------------------------------------------------------------- #
 # Route logging / dataset acceptance

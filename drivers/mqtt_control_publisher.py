@@ -36,6 +36,7 @@ from config.settings import (
     MQTT_PASSWORD,
     MQTT_RASPI5_CONTROL_TOPIC,
     MQTT_RELAY_TOPIC,
+    MQTT_TRIGGER_TOPIC,
     MQTT_USERNAME,
 )
 
@@ -153,6 +154,21 @@ class Raspi5MqttPublisher:
             self._client.publish(MQTT_RELAY_TOPIC, payload=state.upper())
         except Exception as exc:  # noqa: BLE001
             logger.debug("Pi5 MQTT publish_relay error: %s", exc)
+
+    def publish_trigger(self) -> None:
+        """Fire the Pi4 power-relay trigger (CMD_TYPE_TRIG, momentary pulse).
+
+        DataProcessingCenter's `_process_trigger_control` only reacts to an
+        affirmative payload and auto-resets the topic back to "0" itself
+        ~300ms later -- there is no separate on/off duration to request, so
+        both dashboard power buttons should call this the same way.
+        """
+        if self._client is None or not self._connected:
+            return
+        try:
+            self._client.publish(MQTT_TRIGGER_TOPIC, payload="1")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Pi5 MQTT publish_trigger error: %s", exc)
 
     def close(self) -> None:
         if self._client is None:
