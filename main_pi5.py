@@ -158,7 +158,7 @@ def map_calibrated_servo(
     if servo_cmd < home_cmd: #increase power of right side
         servo_cmd -= 10
     elif servo_cmd > home_cmd: #increase power of left side
-        servo_cmd += -5
+        servo_cmd += 5
     
     # Giới hạn an toàn servo 0..180
     servo_cmd = constrain(servo_cmd, 0, 180)
