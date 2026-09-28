@@ -47,7 +47,11 @@ services:
       - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/logs:/data/logs
       - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/routes:/data/routes
       - ${PI5_DEST_DIR:-/opt/car-calib-pi5}/data/models:/data/models:ro
-    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          cpus: "${PI5_CPU_LIMIT:-2.0}"
+          pids: 128
     logging:
       driver: json-file
       options:
