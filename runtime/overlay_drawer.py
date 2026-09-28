@@ -20,6 +20,7 @@ class OverlayTheme:
     red: tuple[int, int, int] = (0, 0, 255)
     cyan: tuple[int, int, int] = (255, 255, 0)
     vp_yellow: tuple[int, int, int] = (0, 255, 255)
+    roi_yellow: tuple[int, int, int] = (0, 235, 255)
 
 
 class OverlayDrawer:
@@ -30,6 +31,9 @@ class OverlayDrawer:
         inner_thresh: float = 3.0,
         outer_thresh: float = 10.0,
         danger_margin_px: int = 100,
+        roi_height_pct: float = 0.6,
+        roi_top_width_pct: float = 1.0,
+        roi_bottom_width_pct: float = 1.0,
         angle_center: float = 90.0,
         angle_span: float = 60.0,
         gauge_width: int = 400,
@@ -39,6 +43,9 @@ class OverlayDrawer:
         self.inner_thresh = float(inner_thresh)
         self.outer_thresh = float(outer_thresh)
         self.danger_margin_px = int(danger_margin_px)
+        self.roi_height_pct = float(roi_height_pct)
+        self.roi_top_width_pct = float(roi_top_width_pct)
+        self.roi_bottom_width_pct = float(roi_bottom_width_pct)
         self.angle_center = float(angle_center)
         self.angle_span = float(angle_span)
         self.gauge_width = int(gauge_width)
@@ -126,6 +133,8 @@ class OverlayDrawer:
         left_intercept_x: int | None,
         right_intercept_x: int | None,
     ) -> None:
+        self._draw_roi_trapezoid(frame, frame_w=frame_w, frame_h=frame_h)
+
         center_x = frame_w // 2
         self._draw_dashed_vertical_line(frame, center_x, 0, frame_h - 1, self.theme.white)
 
@@ -148,6 +157,33 @@ class OverlayDrawer:
             self._draw_bottom_marker(frame, left_intercept_x, frame_h - 1, self._marker_color(left_intercept_x, frame_w))
         if right_intercept_x is not None:
             self._draw_bottom_marker(frame, right_intercept_x, frame_h - 1, self._marker_color(right_intercept_x, frame_w))
+
+    def _draw_roi_trapezoid(self, frame: np.ndarray, *, frame_w: int, frame_h: int) -> None:
+        roi_height = max(1, int(frame_h * max(0.0, min(1.0, self.roi_height_pct))))
+        top_w = frame_w * max(0.0, min(1.0, self.roi_top_width_pct))
+        bottom_w = frame_w * max(0.0, min(1.0, self.roi_bottom_width_pct))
+        polygon = np.array(
+            [[
+                ((frame_w - top_w) / 2, 0),
+                ((frame_w + top_w) / 2, 0),
+                ((frame_w + bottom_w) / 2, roi_height - 1),
+                ((frame_w - bottom_w) / 2, roi_height - 1),
+            ]],
+            dtype=np.int32,
+        )
+        self._fill_alpha_poly(frame, polygon, self.theme.roi_yellow, 0.14)
+        cv2.polylines(frame, polygon, True, self.theme.roi_yellow, 1, cv2.LINE_AA)
+
+    def _fill_alpha_poly(
+        self,
+        frame: np.ndarray,
+        polygon: np.ndarray,
+        color: tuple[int, int, int],
+        alpha: float,
+    ) -> None:
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, polygon, color)
+        cv2.addWeighted(overlay, float(alpha), frame, 1.0 - float(alpha), 0.0, frame)
 
     def _draw_vp_crosshair(self, frame: np.ndarray, vp_coord: tuple[int, int]) -> None:
         x, y = vp_coord

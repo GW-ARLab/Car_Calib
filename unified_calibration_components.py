@@ -175,8 +175,15 @@ class ConfigManager:
 class VisionProcessor:
     """Frame pre-processor and Stage-1 line extractor."""
 
-    def __init__(self, roi_height_pct: float) -> None:
+    def __init__(
+        self,
+        roi_height_pct: float,
+        roi_top_width_pct: float = 1.0,
+        roi_bottom_width_pct: float = 1.0,
+    ) -> None:
         self._roi_height_pct = max(0.0, min(1.0, roi_height_pct))
+        self._roi_top_width_pct = max(0.05, min(1.0, roi_top_width_pct))
+        self._roi_bottom_width_pct = max(0.05, min(1.0, roi_bottom_width_pct))
         self._blur_w = _get_int("VISION_BLUR_KERNEL_W", 5)
         self._blur_h = _get_int("VISION_BLUR_KERNEL_H", 5)
         self._canny_low = _get_int("VISION_CANNY_LOW", 50)
@@ -185,6 +192,27 @@ class VisionProcessor:
         self._hough_min_line_length = _get_int("VISION_HOUGH_MIN_LINE_LENGTH", 40)
         self._hough_max_line_gap = _get_int("VISION_HOUGH_MAX_LINE_GAP", 20)
         self._min_abs_slope = _get_float("VISION_MIN_ABS_SLOPE", 0.3)
+
+    def _apply_trapezoid_mask(self, edges: np.ndarray) -> np.ndarray:
+        """Zero out edges outside a trapezoid narrowing from bottom to top width."""
+        if self._roi_top_width_pct >= 1.0 and self._roi_bottom_width_pct >= 1.0:
+            return edges
+
+        h, w = edges.shape[:2]
+        top_w = w * self._roi_top_width_pct
+        bottom_w = w * self._roi_bottom_width_pct
+        polygon = np.array(
+            [[
+                ((w - top_w) / 2, 0),
+                ((w + top_w) / 2, 0),
+                ((w + bottom_w) / 2, h - 1),
+                ((w - bottom_w) / 2, h - 1),
+            ]],
+            dtype=np.int32,
+        )
+        mask = np.zeros_like(edges)
+        cv2.fillPoly(mask, polygon, 255)
+        return cv2.bitwise_and(edges, mask)
 
     def process_frame(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Extract raw Hough line segments from the configured top ROI."""
@@ -228,6 +256,7 @@ class VisionProcessor:
         blur_h = self._blur_h if self._blur_h % 2 == 1 else self._blur_h + 1
         preprocessed = cv2.GaussianBlur(gray, (blur_w, blur_h), 0)
         edges = cv2.Canny(preprocessed, self._canny_low, self._canny_high)
+        edges = self._apply_trapezoid_mask(edges)
 
         raw_lines = cv2.HoughLinesP(
             edges,
@@ -485,6 +514,9 @@ class TelemetryLogger:
             inner_thresh=self._inner_thresh,
             outer_thresh=self._outer_thresh,
             danger_margin_px=self._danger_margin_px,
+            roi_height_pct=_get_float("ROI_HEIGHT_PCT", 0.6),
+            roi_top_width_pct=_get_float("ROI_TOP_WIDTH_PCT", 0.75),
+            roi_bottom_width_pct=_get_float("ROI_BOTTOM_WIDTH_PCT", 1.0),
         )
         self._csv_writer: Any = None
         self._csv_file: TextIO | None = None
@@ -807,7 +839,11 @@ class UnifiedCalibrator:
         self._preview_enabled = self._resolve_preview_enabled()
 
         self._robot_state = RobotState()
-        self._vision = VisionProcessor(roi_height_pct=_get_float("ROI_HEIGHT_PCT", 0.6))
+        self._vision = VisionProcessor(
+            roi_height_pct=_get_float("ROI_HEIGHT_PCT", 0.6),
+            roi_top_width_pct=_get_float("ROI_TOP_WIDTH_PCT", 0.75),
+            roi_bottom_width_pct=_get_float("ROI_BOTTOM_WIDTH_PCT", 1.0),
+        )
         self._geometry = GeometryCalculator()
         inner_thresh, outer_thresh = self._config.get_vp_thresholds()
         danger_margin, danger_nudge = self._config.get_danger_margins()
@@ -835,6 +871,9 @@ class UnifiedCalibrator:
             inner_thresh=inner_thresh,
             outer_thresh=outer_thresh,
             danger_margin_px=danger_margin,
+            roi_height_pct=self._vision._roi_height_pct,
+            roi_top_width_pct=self._vision._roi_top_width_pct,
+            roi_bottom_width_pct=self._vision._roi_bottom_width_pct,
         )
 
     @property

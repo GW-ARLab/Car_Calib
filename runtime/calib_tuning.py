@@ -47,6 +47,8 @@ class TuneParam:
 
 PARAMS: tuple[TuneParam, ...] = (
     TuneParam("roi_height_pct", "Vision", "ROI height", "float", 0.1, 1.0, 0.01),
+    TuneParam("roi_top_width_pct", "Vision", "ROI top width", "float", 0.05, 1.0, 0.01),
+    TuneParam("roi_bottom_width_pct", "Vision", "ROI bottom width", "float", 0.05, 1.0, 0.01),
     TuneParam("canny_low", "Vision", "Canny low", "int", 0, 500, 1),
     TuneParam("canny_high", "Vision", "Canny high", "int", 0, 500, 1),
     TuneParam("hough_threshold", "Vision", "Hough threshold", "int", 1, 300, 1),
@@ -198,6 +200,8 @@ class CalibTuneManager:
         state = self._calibrator.robot_state
         return {
             "roi_height_pct": float(vision._roi_height_pct),
+            "roi_top_width_pct": float(vision._roi_top_width_pct),
+            "roi_bottom_width_pct": float(vision._roi_bottom_width_pct),
             "canny_low": int(vision._canny_low),
             "canny_high": int(vision._canny_high),
             "hough_threshold": int(vision._hough_threshold),
@@ -218,6 +222,8 @@ class CalibTuneManager:
         state = self._calibrator.robot_state
 
         vision._roi_height_pct = float(values["roi_height_pct"])
+        vision._roi_top_width_pct = float(values["roi_top_width_pct"])
+        vision._roi_bottom_width_pct = float(values["roi_bottom_width_pct"])
         vision._canny_low = int(values["canny_low"])
         vision._canny_high = int(values["canny_high"])
         vision._hough_threshold = int(values["hough_threshold"])
@@ -243,6 +249,14 @@ class CalibTuneManager:
             "_outer_thresh": float(values["vp_outer_thresh"]),
             "_danger_margin_px": int(values["danger_margin_px"]),
         }
+        drawer_attrs = {
+            "inner_thresh": float(values["vp_inner_thresh"]),
+            "outer_thresh": float(values["vp_outer_thresh"]),
+            "danger_margin_px": int(values["danger_margin_px"]),
+            "roi_height_pct": float(values["roi_height_pct"]),
+            "roi_top_width_pct": float(values["roi_top_width_pct"]),
+            "roi_bottom_width_pct": float(values["roi_bottom_width_pct"]),
+        }
         for owner in (self._calibrator, getattr(self._calibrator, "_telemetry", None)):
             if owner is None:
                 continue
@@ -251,15 +265,9 @@ class CalibTuneManager:
                     setattr(owner, attr, value)
             drawer = getattr(owner, "_overlay_drawer", None)
             if drawer is not None:
-                for attr, value in attrs.items():
+                for attr, value in drawer_attrs.items():
                     if hasattr(drawer, attr):
                         setattr(drawer, attr, value)
-                if hasattr(drawer, "inner_thresh"):
-                    drawer.inner_thresh = float(values["vp_inner_thresh"])
-                if hasattr(drawer, "outer_thresh"):
-                    drawer.outer_thresh = float(values["vp_outer_thresh"])
-                if hasattr(drawer, "danger_margin_px"):
-                    drawer.danger_margin_px = int(values["danger_margin_px"])
 
 
 def _coerce_value(param: TuneParam, value: Any) -> int | float:

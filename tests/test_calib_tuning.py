@@ -12,6 +12,8 @@ from runtime.calib_tuning import CalibTuneManager, TuneBlockedError, TuneValidat
 def _fake_calibrator():
     vision = SimpleNamespace(
         _roi_height_pct=0.6,
+        _roi_top_width_pct=0.75,
+        _roi_bottom_width_pct=1.0,
         _canny_low=50,
         _canny_high=150,
         _hough_threshold=40,
@@ -52,6 +54,8 @@ def test_tune_apply_updates_runtime_fields_and_resets_pd_state(tmp_path):
     status = manager.apply(
         {
             "roi_height_pct": 0.7,
+            "roi_top_width_pct": 0.8,
+            "roi_bottom_width_pct": 0.95,
             "canny_low": 60,
             "canny_high": 170,
             "hough_threshold": 55,
