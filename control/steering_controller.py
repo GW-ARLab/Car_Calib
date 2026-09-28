@@ -4,8 +4,10 @@ Mirrors the SteeringController used by the offline UnifiedCalibrator so the
 live loop and the offline processor share one calibration law. States:
 
 * ``GAPPING``        — vision lost (no VP / no intercepts), hold center
-* ``DANGER_LEFT``    — left intercept past margin, fixed nudge right
-* ``DANGER_RIGHT``   — right intercept past margin, fixed nudge left
+* ``DANGER_LEFT``    — left intercept inside left edge band (car drifted
+  toward the right line), fixed nudge left (angle above center)
+* ``DANGER_RIGHT``   — right intercept inside right edge band (car drifted
+  toward the left line), fixed nudge right (angle below center)
 * ``TRACKING_COAST`` — error inside hysteresis dead-band, hold center
 * ``TRACKING_PD``    — error past outer threshold, PD correction active
 
@@ -63,14 +65,14 @@ class SteeringController:
         # Stage 3: Danger Zone override (bypass PD)
         left_margin = self._danger_margin
         right_margin = max(0, int(frame_width) - self._danger_margin)
-        if left_intercept > left_margin:
-            self._tracking_active = False
-            self._last_error = 0.0
-            return center - self._nudge_deg, "DANGER_RIGHT"
-        if right_intercept < right_margin:
+        if left_intercept < left_margin:
             self._tracking_active = False
             self._last_error = 0.0
             return center + self._nudge_deg, "DANGER_LEFT"
+        if right_intercept > right_margin:
+            self._tracking_active = False
+            self._last_error = 0.0
+            return center - self._nudge_deg, "DANGER_RIGHT"
 
         # Stage 2: Tracking with hysteresis
         error = float(vp_angle) - 90.0
@@ -101,7 +103,7 @@ class SteeringController:
         margin = self._danger_margin
         return {
             "danger_boundary": f"LEFT < {margin}px | RIGHT > {frame_width - margin}px",
-            "recovery_direction": "LEFT" if state == "DANGER_RIGHT" else ("RIGHT" if state == "DANGER_LEFT" else "NONE"),
+            "recovery_direction": "LEFT" if state == "DANGER_LEFT" else ("RIGHT" if state == "DANGER_RIGHT" else "NONE"),
             "danger_threshold_x": str(margin),
         }
 

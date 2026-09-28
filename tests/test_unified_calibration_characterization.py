@@ -143,9 +143,9 @@ def test_geometry_maps_intersection_intercepts_and_angle() -> None:
     ("vp_angle", "left", "right", "expected_angle", "expected_state"),
     [
         (None, None, None, 90.0, "GAPPING"),
-        (90.0, 101, 600, 95.0, "DANGER_RIGHT"),
-        (90.0, 0, 539, 85.0, "DANGER_LEFT"),
-        (90.0, -250, 449, 85.0, "DANGER_LEFT"),
+        (90.0, 101, 600, 85.0, "DANGER_RIGHT"),
+        (90.0, 0, 539, 95.0, "DANGER_LEFT"),
+        (90.0, -250, 449, 95.0, "DANGER_LEFT"),
         (90.0, 300, 500, 90.0, "AMBIGUOUS_DANGER"),
         (90.0, 100, 540, 90.0, "TRACKING_COAST"),
         (92.0, 100, 540, 90.0, "TRACKING_COAST"),
