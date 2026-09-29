@@ -384,6 +384,11 @@ def main() -> None:
     route_session: RouteSession | None = None
     route_video_writer: cv2.VideoWriter | None = None
     route_video_disabled = False
+    # Overlay-free copy of the camera frames for offline replay
+    # (scripts/replay_route.py); adds roughly 45% to per-route storage.
+    route_raw_video_enabled = _env_bool("ROUTE_RAW_VIDEO_ENABLED", False)
+    route_raw_writer: cv2.VideoWriter | None = None
+    route_raw_disabled = False
     route_csv_file: Any | None = None
     route_csv_writer: csv.DictWriter | None = None
     sasc_logger: SascExperimentLogger | None = None
@@ -466,20 +471,23 @@ def main() -> None:
         script_runner.set_handlers(_base_handler, _servo_handler, _relay_handler)
 
         def _submit_script(body: str) -> bool:
-            nonlocal route_session, route_video_writer, route_video_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
+            nonlocal route_session, route_video_writer, route_video_disabled, route_raw_writer, route_raw_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
             payload = json.loads(body)
             steps = validate_route_steps(payload.get("steps", []))
             preset_name = str(payload.get("preset_name") or "").strip()
             ok = script_runner.submit(steps)
             if ok:
                 mqtt_publisher.publish_mode_camera()
-                if route_video_writer is not None:
-                    try:
-                        route_video_writer.release()
-                    except OSError as exc:
-                        storage.mark_error(exc)
-                    route_video_writer = None
+                for writer in (route_video_writer, route_raw_writer):
+                    if writer is not None:
+                        try:
+                            writer.release()
+                        except OSError as exc:
+                            storage.mark_error(exc)
+                route_video_writer = None
+                route_raw_writer = None
                 route_video_disabled = False
+                route_raw_disabled = False
                 if route_csv_file is not None:
                     try:
                         route_csv_file.close()
@@ -499,6 +507,7 @@ def main() -> None:
                         route_session.attach_meta("source", "dashboard_direct")
                         route_session.attach_meta("preset_name", preset_name)
                         route_session.attach_meta("video_file", "")
+                        route_session.attach_meta("raw_video_file", "")
                         route_session.attach_meta("csv_file", "route_frames.csv")
                         route_session.attach_meta("sasc_file", "sasc_baseline_log.csv")
                         route_session.attach_meta("calib_tune", tune_manager.status())
@@ -539,13 +548,15 @@ def main() -> None:
         http.start()
 
     def _finalize_route(status: str) -> None:
-        nonlocal route_session, route_video_writer, route_video_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
-        if route_video_writer is not None:
-            try:
-                route_video_writer.release()
-            except OSError as exc:
-                storage.mark_error(exc)
-            route_video_writer = None
+        nonlocal route_session, route_video_writer, route_video_disabled, route_raw_writer, route_raw_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
+        for writer in (route_video_writer, route_raw_writer):
+            if writer is not None:
+                try:
+                    writer.release()
+                except OSError as exc:
+                    storage.mark_error(exc)
+        route_video_writer = None
+        route_raw_writer = None
         if route_csv_file is not None:
             try:
                 route_csv_file.flush()
@@ -572,16 +583,23 @@ def main() -> None:
             logger.warning("Route summary could not be written: %s", exc)
         route_session = None
         route_video_disabled = False
+        route_raw_disabled = False
         _refresh_storage_active_paths()
         storage.retain()
         current_sasc_scene_type = ""
 
-    def _open_route_video_writer(frame_w: int, frame_h: int) -> cv2.VideoWriter | None:
+    def _open_route_video_writer(
+        frame_w: int,
+        frame_h: int,
+        *,
+        stem: str = "route",
+        meta_key: str = "video_file",
+    ) -> cv2.VideoWriter | None:
         if route_session is None:
             return None
         candidates = [
-            ("route.avi", "MJPG"),
-            ("route.mp4", "mp4v"),
+            (f"{stem}.avi", "MJPG"),
+            (f"{stem}.mp4", "mp4v"),
         ]
         for filename, codec in candidates:
             path = route_session.route_dir / filename
@@ -592,12 +610,12 @@ def main() -> None:
                 (frame_w, frame_h),
             )
             if writer.isOpened():
-                route_session.attach_meta("video_file", filename)
+                route_session.attach_meta(meta_key, filename)
                 logger.info("Route video recording to %s codec=%s", path, codec)
                 return writer
             writer.release()
             logger.warning("Route video writer unavailable: %s codec=%s", path, codec)
-        route_session.attach_meta("video_file", "")
+        route_session.attach_meta(meta_key, "")
         return None
 
     # ------------------------------------------------------------------ #
@@ -830,6 +848,14 @@ def main() -> None:
                             route_video_disabled = route_video_writer is None
                         if route_video_writer is not None:
                             route_video_writer.write(display_frame)
+                        if route_raw_video_enabled and route_raw_writer is None and not route_raw_disabled:
+                            raw_h, raw_w = frame.shape[:2]
+                            route_raw_writer = _open_route_video_writer(
+                                raw_w, raw_h, stem="route_raw", meta_key="raw_video_file"
+                            )
+                            route_raw_disabled = route_raw_writer is None
+                        if route_raw_writer is not None:
+                            route_raw_writer.write(frame)
                         route_session.update_frame(
                             mono_now=time.monotonic(),
                             theta=theta,
