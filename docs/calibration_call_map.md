@@ -420,7 +420,7 @@ Main output cua algorithm la `CalibrationResult`:
 | [`VisionProcessor.__init__()`](../unified_calibration_components.py#L167) | `unified_calibration_components.py` | `config.settings._get_*` | Load ROI, blur, Canny, Hough, min slope. |
 | [`VisionProcessor.process_frame()`](../unified_calibration_components.py#L178) | `unified_calibration_components.py` | `process_frame_debug()` | Convenience: chi tra `lines`. |
 | [`VisionProcessor.process_frame_debug()`](../unified_calibration_components.py#L183) | `unified_calibration_components.py` | `cv2.cvtColor`, `cv2.GaussianBlur`, `cv2.Canny`, `cv2.HoughLinesP` | Tra `(lines, vision_debug)`. Lines la list `(x1,y1,x2,y2)`. |
-| [`VisionProcessor._apply_geometric_filter()`](../unified_calibration_components.py#L243) | `unified_calibration_components.py` | `math.hypot` | Chon line negative slope dai nhat + positive slope dai nhat. Neu thieu 1 ben -> `None`. |
+| [`VisionProcessor._apply_geometric_filter()`](../unified_calibration_components.py#L243) | `unified_calibration_components.py` | `math.hypot` | Loc ho line doc theo diem cat hang chan troi `VISION_VP_HORIZON_Y`, chon line gan tam nhat moi ben. Neu thieu 1 ben -> `None`. |
 
 Vision data flow:
 

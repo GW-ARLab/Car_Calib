@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,7 @@ def _fake_calibrator():
         _hough_min_line_length=40,
         _hough_max_line_gap=20,
         _min_abs_slope=0.3,
+        _vp_horizon_y=-518.0,
     )
     steering = SimpleNamespace(
         _inner_thresh=3.0,
@@ -121,3 +123,31 @@ def test_tune_save_and_reload_saved_values(tmp_path):
     assert loaded.status()["saved"]["exists"] is True
     assert calibrator.robot_state.pid.kp == pytest.approx(1.25)
     assert calibrator.steering_controller._danger_margin == 150
+
+
+def test_tune_file_missing_new_params_still_loads(tmp_path):
+    tune_file = tmp_path / "calib_tune.json"
+    manager = CalibTuneManager(_fake_calibrator(), tune_file)
+    manager.apply({"pid_kp": 1.25})
+    manager.save()
+    payload = json.loads(tune_file.read_text(encoding="utf-8"))
+    del payload["values"]["vp_horizon_y"]  # file saved before the param existed
+    tune_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    calibrator = _fake_calibrator()
+    calibrator._vision._vp_horizon_y = -600.0
+    loaded = CalibTuneManager(calibrator, tune_file)
+
+    assert loaded.status()["saved"]["exists"] is True
+    assert calibrator.robot_state.pid.kp == pytest.approx(1.25)
+    assert calibrator._vision._vp_horizon_y == pytest.approx(-600.0)
+
+
+def test_tune_apply_updates_vp_horizon(tmp_path):
+    calibrator = _fake_calibrator()
+    manager = CalibTuneManager(calibrator, tmp_path / "calib_tune.json")
+
+    status = manager.apply({"vp_horizon_y": -450})
+
+    assert status["values"]["vp_horizon_y"] == -450
+    assert calibrator._vision._vp_horizon_y == pytest.approx(-450.0)

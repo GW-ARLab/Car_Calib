@@ -60,7 +60,7 @@ control, control-state updates, and result assembly.
 | --- | --- |
 | `input` | `validate_frame` |
 | `vision` | `preprocess_and_extract_lines` |
-| `lane_pair_selection` | `select_opposite_slope_pair` |
+| `lane_pair_selection` | `select_lane_pair` |
 | `vision_debug` | `draw_selected_lines` |
 | `geometry` | `calculate_bottom_intercepts`, `calculate_vanishing_point`, `map_vanishing_point_to_angle` |
 | `steering_control` | `compute_steering_command` |

@@ -192,6 +192,9 @@ class VisionProcessor:
         self._hough_min_line_length = _get_int("VISION_HOUGH_MIN_LINE_LENGTH", 40)
         self._hough_max_line_gap = _get_int("VISION_HOUGH_MAX_LINE_GAP", 20)
         self._min_abs_slope = _get_float("VISION_MIN_ABS_SLOPE", 0.3)
+        # Image row where lane lines converge (camera pitch is fixed). Default
+        # is the median VP row measured on the Pi5 car camera at 640x480.
+        self._vp_horizon_y = _get_float("VISION_VP_HORIZON_Y", -518.0)
 
     def _apply_trapezoid_mask(self, edges: np.ndarray) -> np.ndarray:
         """Zero out edges outside a trapezoid narrowing from bottom to top width."""
@@ -311,37 +314,94 @@ class VisionProcessor:
     def _apply_geometric_filter(
         self,
         lines: list[tuple[int, int, int, int]],
+        frame_width: int,
+        frame_height: int,
     ) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None:
-        """Select the strongest negative and positive slope lines."""
-        if not lines:
+        """Select the lane lines nearest the image centre on each side.
+
+        Only lines of the dominant longitudinal family are considered: each
+        line votes where it crosses the horizon row, and the family with the
+        most supporting length wins. This keeps transverse tile grout lines
+        out of the pair and does not depend on slope sign, which flips to
+        the same side for both lane lines once the car is yawed.
+        """
+        longitudinal = [
+            line for line in lines
+            if line[0] == line[2]
+            or abs((line[3] - line[1]) / (line[2] - line[0])) >= self._min_abs_slope
+        ]
+        family = self._dominant_family(longitudinal, frame_width)
+        if not family:
             return None
 
-        best_negative: tuple[int, int, int, int] | None = None
-        best_positive: tuple[int, int, int, int] | None = None
-        best_negative_len = 0.0
-        best_positive_len = 0.0
+        # Merge collinear fragments by bottom intercept; keep the longest one.
+        groups: list[dict[str, Any]] = []
+        for x_bottom, line in sorted(
+            (_x_at_row(line, frame_height), line) for line in family
+        ):
+            if groups and x_bottom - groups[-1]["last_x"] <= LANE_CLUSTER_TOL_PX:
+                group = groups[-1]
+            else:
+                group = {"lines": [], "length": 0.0}
+                groups.append(group)
+            group["last_x"] = x_bottom
+            group["lines"].append(line)
+            group["length"] += _line_length(line)
 
-        for x1, y1, x2, y2 in lines:
-            dx = x2 - x1
-            if dx == 0:
+        center_x = frame_width / 2.0
+        left: tuple[float, tuple[int, int, int, int]] | None = None
+        right: tuple[float, tuple[int, int, int, int]] | None = None
+        for group in groups:
+            if group["length"] < LANE_MIN_GROUP_LENGTH_PX:
                 continue
+            line = max(group["lines"], key=_line_length)
+            x_bottom = _x_at_row(line, frame_height)
+            if x_bottom < center_x:
+                if left is None or x_bottom > left[0]:
+                    left = (x_bottom, line)
+            elif right is None or x_bottom < right[0]:
+                right = (x_bottom, line)
 
-            slope = (y2 - y1) / dx
-            if abs(slope) < self._min_abs_slope:
-                continue
-
-            length = hypot(dx, y2 - y1)
-            line = (x1, y1, x2, y2)
-            if slope < 0 and length > best_negative_len:
-                best_negative = line
-                best_negative_len = length
-            elif slope > 0 and length > best_positive_len:
-                best_positive = line
-                best_positive_len = length
-
-        if best_negative is None or best_positive is None:
+        if left is None or right is None:
             return None
-        return best_negative, best_positive
+        return left[1], right[1]
+
+    def _dominant_family(
+        self,
+        lines: list[tuple[int, int, int, int]],
+        frame_width: int,
+    ) -> list[tuple[int, int, int, int]]:
+        """Return the lines whose horizon crossings cluster with the most length."""
+        votes = [
+            (x_horizon, _line_length(line), line)
+            for line in lines
+            if abs(x_horizon := _x_at_row(line, self._vp_horizon_y)) < 4 * frame_width
+        ]
+        best: list[tuple[float, float, tuple[int, int, int, int]]] = []
+        best_length = 0.0
+        for anchor, _, _ in votes:
+            members = [vote for vote in votes if abs(vote[0] - anchor) <= VP_FAMILY_TOL_PX]
+            support = sum(vote[1] for vote in members)
+            if support > best_length:
+                best, best_length = members, support
+        return [vote[2] for vote in best]
+
+
+# Lane-pair selection tolerances (pixels, 640x480 frame).
+VP_FAMILY_TOL_PX = 30.0
+LANE_CLUSTER_TOL_PX = 25.0
+LANE_MIN_GROUP_LENGTH_PX = 60.0
+
+
+def _line_length(line: tuple[int, int, int, int]) -> float:
+    return hypot(line[2] - line[0], line[3] - line[1])
+
+
+def _x_at_row(line: tuple[int, int, int, int], y: float) -> float:
+    x1, y1, x2, y2 = line
+    if y2 == y1:
+        return float(x1)
+    return x1 + (y - y1) * (x2 - x1) / (y2 - y1)
 
 
 class GeometryCalculator:
@@ -916,8 +976,8 @@ class UnifiedCalibrator:
             lines, vision_debug = self._vision.process_frame_debug(frame)
 
             stage = "lane_pair_selection"
-            process = "select_opposite_slope_pair"
-            selected = self._vision._apply_geometric_filter(lines)
+            process = "select_lane_pair"
+            selected = self._vision._apply_geometric_filter(lines, frame_w, frame_h)
             if selected is not None:
                 line1, line2 = selected
                 vision_debug["selected_lines"] = [line1, line2]
@@ -931,7 +991,7 @@ class UnifiedCalibrator:
                 cv2.line(grouped_vis, (line2[0], line2[1]), (line2[2], line2[3]), (255, 0, 255), 2)
                 cv2.putText(
                     grouped_vis,
-                    "LEFT / NEG",
+                    "LEFT",
                     (max(0, line1[0]), max(18, line1[1])),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.45,
@@ -941,7 +1001,7 @@ class UnifiedCalibrator:
                 )
                 cv2.putText(
                     grouped_vis,
-                    "RIGHT / POS",
+                    "RIGHT",
                     (max(0, line2[0]), max(18, line2[1])),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.45,
@@ -960,12 +1020,12 @@ class UnifiedCalibrator:
                 left_intercept, right_intercept = sorted((intercept_a, intercept_b))
                 selected_left_info = self._geometry.describe_line(
                     selected_left_line,
-                    role="left_negative",
+                    role="left",
                     bottom_intercept=intercept_a,
                 )
                 selected_right_info = self._geometry.describe_line(
                     selected_right_line,
-                    role="right_positive",
+                    role="right",
                     bottom_intercept=intercept_b,
                 )
                 vision_debug["selected_left_line"] = selected_left_line

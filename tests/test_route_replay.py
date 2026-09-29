@@ -118,10 +118,10 @@ def _write_video(path: Path, frames: list[np.ndarray]) -> None:
 
 
 def _lane_frame(shift: int = 0) -> np.ndarray:
-    """Light floor with two dark grout lines converging toward the top."""
+    """Light floor with two dark grout lines converging on the default horizon row (-518)."""
     frame = np.full((480, 640, 3), 200, dtype=np.uint8)
-    cv2.line(frame, (80 + shift, 479), (280 + shift, 0), (40, 40, 40), 6)
-    cv2.line(frame, (560 + shift, 479), (360 + shift, 0), (40, 40, 40), 6)
+    cv2.line(frame, (80 + shift, 479), (195 + shift, 0), (40, 40, 40), 6)
+    cv2.line(frame, (560 + shift, 479), (445 + shift, 0), (40, 40, 40), 6)
     return frame
 
 

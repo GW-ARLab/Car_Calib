@@ -59,15 +59,12 @@ Existing HUD helpers consume the outer `vision_debug` key.
 
 ### `VisionProcessor._apply_geometric_filter`
 
-Current private behavior:
+Current private behavior (see `docs/vision.md`):
 
-- rejects vertical lines;
-- rejects lines below `VISION_MIN_ABS_SLOPE`;
-- selects the longest negative-slope and positive-slope candidate;
-- returns `None` unless both signs are available.
-
-The approved next geometry refinement will select the most opposite valid
-slopes and expose explicit rejection reasons.
+- keeps vertical lines and lines with `|slope| >= VISION_MIN_ABS_SLOPE`;
+- keeps only the dominant family voting at horizon row `VISION_VP_HORIZON_Y`;
+- selects the nearest line group on each side of the image centre;
+- returns `None` unless both sides have a group.
 
 ### `GeometryCalculator`
 

@@ -55,6 +55,7 @@ PARAMS: tuple[TuneParam, ...] = (
     TuneParam("hough_min_line_length", "Vision", "Hough min line", "int", 1, 500, 1),
     TuneParam("hough_max_line_gap", "Vision", "Hough max gap", "int", 0, 200, 1),
     TuneParam("min_abs_slope", "Vision", "Min abs slope", "float", 0.0, 5.0, 0.01),
+    TuneParam("vp_horizon_y", "Vision", "VP horizon row", "int", -5000, 0, 1),
     TuneParam("pid_kp", "Steering", "PID Kp", "float", 0.0, 10.0, 0.01),
     TuneParam("pid_kd", "Steering", "PID Kd", "float", 0.0, 10.0, 0.01),
     TuneParam("vp_inner_thresh", "Steering", "VP inner", "float", 0.0, 45.0, 0.1),
@@ -147,7 +148,8 @@ class CalibTuneManager:
             values = payload.get("values")
             if not isinstance(values, dict):
                 raise TuneValidationError("tune file values must be an object")
-            validated = self._validate(values, base=None)
+            # Params added after the file was saved keep their current value.
+            validated = self._validate(values, base=self._read_current())
         except Exception as exc:  # noqa: BLE001
             logger.warning("Ignoring invalid calib tune file %s: %s", self._tune_file, exc)
             return False
@@ -208,6 +210,7 @@ class CalibTuneManager:
             "hough_min_line_length": int(vision._hough_min_line_length),
             "hough_max_line_gap": int(vision._hough_max_line_gap),
             "min_abs_slope": float(vision._min_abs_slope),
+            "vp_horizon_y": int(vision._vp_horizon_y),
             "pid_kp": float(state.pid.kp),
             "pid_kd": float(state.pid.kd),
             "vp_inner_thresh": float(steering._inner_thresh),
@@ -230,6 +233,7 @@ class CalibTuneManager:
         vision._hough_min_line_length = int(values["hough_min_line_length"])
         vision._hough_max_line_gap = int(values["hough_max_line_gap"])
         vision._min_abs_slope = float(values["min_abs_slope"])
+        vision._vp_horizon_y = float(values["vp_horizon_y"])
 
         state.pid.kp = float(values["pid_kp"])
         state.pid.kd = float(values["pid_kd"])

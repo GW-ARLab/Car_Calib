@@ -42,7 +42,7 @@ class _VisionStub:
             },
         )
 
-    def _apply_geometric_filter(self, lines):
+    def _apply_geometric_filter(self, lines, frame_width, frame_height):
         self.filter_calls += 1
         return lines[0], lines[1]
 
@@ -109,20 +109,50 @@ def _make_calibrator_for_characterization() -> UnifiedCalibrator:
     return calibrator
 
 
-def test_vision_filter_selects_longest_opposite_slope_pair() -> None:
-    processor = VisionProcessor(roi_height_pct=0.6)
-    selected = processor._apply_geometric_filter(
-        [
-            (0, 20, 10, 0),
-            (0, 100, 50, 0),
-            (0, 0, 10, 20),
-            (0, 0, 50, 100),
-            (0, 0, 100, 1),
-            (5, 0, 5, 100),
-        ]
-    )
+def _lane_line(x_bottom: float, vp_x: float, vp_y: float = -518.0) -> tuple[int, int, int, int]:
+    """Segment from the bottom row up to y=100 on the line through (x_bottom, 480) and the VP."""
+    x_top = x_bottom + (100 - 480) * (vp_x - x_bottom) / (vp_y - 480)
+    return (round(x_bottom), 480, round(x_top), 100)
 
-    assert selected == ((0, 100, 50, 0), (0, 0, 50, 100))
+
+def test_vision_filter_picks_same_slope_sign_pair_when_car_is_yawed() -> None:
+    processor = VisionProcessor(roi_height_pct=1.0)
+    # VP far right: both lane lines lean right (negative slope).
+    left, right = _lane_line(60, 1400), _lane_line(420, 1400)
+
+    assert processor._apply_geometric_filter([left, right], 640, 480) == (left, right)
+
+
+def test_vision_filter_ignores_transverse_grout_line() -> None:
+    processor = VisionProcessor(roi_height_pct=1.0)
+    left, right = _lane_line(140, 330), _lane_line(490, 330)
+    transverse = (0, 400, 640, 90)  # long, steep enough, but from the other family
+
+    assert processor._apply_geometric_filter([transverse, left, right], 640, 480) == (left, right)
+
+
+def test_vision_filter_keeps_vertical_lane_line() -> None:
+    processor = VisionProcessor(roi_height_pct=1.0)
+    left, right = _lane_line(120, 470), (470, 480, 470, 100)
+
+    assert processor._apply_geometric_filter([left, right], 640, 480) == (left, right)
+
+
+def test_vision_filter_picks_nearest_lines_and_merges_fragments() -> None:
+    processor = VisionProcessor(roi_height_pct=1.0)
+    far_left, left, right = _lane_line(-200, 330), _lane_line(150, 330), _lane_line(500, 330)
+    right_fragment = (right[0] + 2, 480, right[0] + 1, 440)  # too short on its own
+
+    selected = processor._apply_geometric_filter([far_left, left, right_fragment, right], 640, 480)
+
+    assert selected == (left, right)
+
+
+def test_vision_filter_returns_none_with_lines_on_one_side_only() -> None:
+    processor = VisionProcessor(roi_height_pct=1.0)
+    lines = [_lane_line(40, 330), _lane_line(200, 330), (0, 470, 640, 460)]
+
+    assert processor._apply_geometric_filter(lines, 640, 480) is None
 
 
 def test_geometry_maps_intersection_intercepts_and_angle() -> None:

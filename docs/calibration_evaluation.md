@@ -48,9 +48,9 @@ evaluations/baseline/
 
 Selected-pair diagnostics identify:
 
-- `selected_left_line_info`: current negative-slope line, labeled `LEFT / NEG`;
-- `selected_right_line_info`: current positive-slope line, labeled
-  `RIGHT / POS`;
+- `selected_left_line_info`: lane line left of the image centre, labeled `LEFT`;
+- `selected_right_line_info`: lane line right of the image centre, labeled
+  `RIGHT`;
 - endpoints, slope, length, and the line's own bottom intercept.
 
 Vanishing-point coordinates are never clamped in records. `vp_location`
