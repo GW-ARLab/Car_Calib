@@ -389,6 +389,9 @@ def main() -> None:
     route_raw_video_enabled = _env_bool("ROUTE_RAW_VIDEO_ENABLED", False)
     route_raw_writer: cv2.VideoWriter | None = None
     route_raw_disabled = False
+    # Dashboard "record" hold: keeps the route session open with or without a
+    # script, so it is only finalized once both the hold and the script end.
+    record_hold = False
     route_csv_file: Any | None = None
     route_csv_writer: csv.DictWriter | None = None
     sasc_logger: SascExperimentLogger | None = None
@@ -431,6 +434,57 @@ def main() -> None:
     # instead of the calibrated steering/drive command for that frame.
     object_detector = ObjectDetector.from_env()
 
+    def _release_route_writers() -> None:
+        nonlocal route_video_writer, route_video_disabled, route_raw_writer, route_raw_disabled
+        nonlocal route_csv_file, route_csv_writer, sasc_logger
+        for writer in (route_video_writer, route_raw_writer):
+            if writer is not None:
+                try:
+                    writer.release()
+                except OSError as exc:
+                    storage.mark_error(exc)
+        route_video_writer = None
+        route_raw_writer = None
+        route_video_disabled = False
+        route_raw_disabled = False
+        if route_csv_file is not None:
+            try:
+                route_csv_file.flush()
+                route_csv_file.close()
+            except OSError as exc:
+                storage.mark_error(exc)
+            route_csv_file = None
+            route_csv_writer = None
+        if sasc_logger is not None:
+            sasc_logger.close()
+            sasc_logger = None
+
+    def _start_route_session(route_mode: str, meta: dict[str, Any]) -> bool:
+        nonlocal route_session
+        _release_route_writers()
+        storage.retain()
+        if not storage.recover_if_possible():
+            logger.warning("Route recording disabled: %s", storage.health().reason)
+            return False
+        try:
+            session = RouteSession(route_mode=route_mode)
+            for key, value in meta.items():
+                session.attach_meta(key, value)
+            session.attach_meta("video_file", "")
+            session.attach_meta("raw_video_file", "")
+            session.attach_meta("csv_file", "route_frames.csv")
+            session.attach_meta("sasc_file", "sasc_baseline_log.csv")
+            session.attach_meta("calib_tune", tune_manager.status())
+            session.start(time.monotonic())
+        except OSError as exc:
+            storage.mark_error(exc)
+            logger.warning("Route recording disabled: %s", exc)
+            return False
+        route_session = session
+        _refresh_storage_active_paths()
+        logger.info("Route recording started: %s mode=%s", session.route_id, route_mode)
+        return True
+
     if not args.no_dashboard:
         http = Pi5HttpServer(host=args.host, port=args.port)
         http.set_stream_broker(stream_broker)
@@ -471,61 +525,70 @@ def main() -> None:
         script_runner.set_handlers(_base_handler, _servo_handler, _relay_handler)
 
         def _submit_script(body: str) -> bool:
-            nonlocal route_session, route_video_writer, route_video_disabled, route_raw_writer, route_raw_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
+            nonlocal current_sasc_scene_type
             payload = json.loads(body)
             steps = validate_route_steps(payload.get("steps", []))
             preset_name = str(payload.get("preset_name") or "").strip()
             ok = script_runner.submit(steps)
             if ok:
                 mqtt_publisher.publish_mode_camera()
-                for writer in (route_video_writer, route_raw_writer):
-                    if writer is not None:
-                        try:
-                            writer.release()
-                        except OSError as exc:
-                            storage.mark_error(exc)
-                route_video_writer = None
-                route_raw_writer = None
-                route_video_disabled = False
-                route_raw_disabled = False
-                if route_csv_file is not None:
-                    try:
-                        route_csv_file.close()
-                    except OSError as exc:
-                        storage.mark_error(exc)
-                    route_csv_file = None
-                    route_csv_writer = None
-                if sasc_logger is not None:
-                    sasc_logger.close()
-                    sasc_logger = None
-                storage.retain()
-                if storage.recover_if_possible():
-                    try:
-                        route_session = RouteSession(route_mode="SCRIPT")
-                        _refresh_storage_active_paths()
-                        route_session.attach_meta("script_steps", steps)
-                        route_session.attach_meta("source", "dashboard_direct")
-                        route_session.attach_meta("preset_name", preset_name)
-                        route_session.attach_meta("video_file", "")
-                        route_session.attach_meta("raw_video_file", "")
-                        route_session.attach_meta("csv_file", "route_frames.csv")
-                        route_session.attach_meta("sasc_file", "sasc_baseline_log.csv")
-                        route_session.attach_meta("calib_tune", tune_manager.status())
-                        route_session.start(time.monotonic())
-                        current_sasc_scene_type = preset_name
-                        logger.info("Route recording started: %s", route_session.route_id)
-                    except OSError as exc:
-                        route_session = None
-                        _refresh_storage_active_paths()
-                        storage.mark_error(exc)
-                        logger.warning("Route recording disabled: %s", exc)
-                else:
-                    logger.warning("Route recording disabled: %s", storage.health().reason)
+                session = route_session
+                if record_hold and session is not None:
+                    # The record hold owns the open route: log this script
+                    # inside it instead of starting a new one.
+                    session.append_meta("script_runs", {
+                        "start_frame": session.total_frames,
+                        "script_steps": steps,
+                        "preset_name": preset_name,
+                    })
+                elif _start_route_session("SCRIPT", {
+                    "script_steps": steps,
+                    "source": "dashboard_direct",
+                    "preset_name": preset_name,
+                }):
+                    current_sasc_scene_type = preset_name
             return ok
+
+        def _record_status() -> dict[str, Any]:
+            session = route_session
+            return {
+                "active": record_hold,
+                "route_id": session.route_id if session is not None else None,
+            }
+
+        def _start_record() -> dict[str, Any]:
+            nonlocal record_hold
+            if record_hold:
+                return _record_status()
+            # Raise the hold before opening the session so the main loop never
+            # sees a script-less session without it and finalizes it at once.
+            record_hold = True
+            session = route_session
+            if session is not None:
+                # Extend the running script's route instead of starting a new one.
+                session.attach_meta("record_hold", True)
+            elif not _start_route_session(
+                "RECORD", {"source": "dashboard_record", "record_hold": True}
+            ):
+                record_hold = False
+                raise ScriptValidationError(
+                    f"recording unavailable: {storage.health().reason or 'storage error'}"
+                )
+            return _record_status()
+
+        def _stop_record() -> dict[str, Any]:
+            nonlocal record_hold
+            record_hold = False
+            return _record_status()
 
         http.set_script_runner(lambda: script_runner.status())
         http.set_script_stopper(script_runner.stop)
         http.set_script_submitter(_submit_script)
+        http.set_record_handlers(
+            starter=_start_record,
+            stopper=_stop_record,
+            status_getter=_record_status,
+        )
         http.set_steps_getter(lambda: _steps)
         http.set_steps_setter(lambda body: _steps.extend(validate_route_steps(json.loads(body).get("steps", []))))
         http.set_presets_getter(lambda: [{"name": k, "steps": v, "steps_count": len(v)} for k, v in _presets.items()])
@@ -548,26 +611,10 @@ def main() -> None:
         http.start()
 
     def _finalize_route(status: str) -> None:
-        nonlocal route_session, route_video_writer, route_video_disabled, route_raw_writer, route_raw_disabled, route_csv_file, route_csv_writer, sasc_logger, current_sasc_scene_type
-        for writer in (route_video_writer, route_raw_writer):
-            if writer is not None:
-                try:
-                    writer.release()
-                except OSError as exc:
-                    storage.mark_error(exc)
-        route_video_writer = None
-        route_raw_writer = None
-        if route_csv_file is not None:
-            try:
-                route_csv_file.flush()
-                route_csv_file.close()
-            except OSError as exc:
-                storage.mark_error(exc)
-            route_csv_file = None
-            route_csv_writer = None
-        if sasc_logger is not None:
-            sasc_logger.close()
-            sasc_logger = None
+        nonlocal route_session, record_hold, current_sasc_scene_type
+        _release_route_writers()
+        # Any finalize (stop, storage error, shutdown) ends a record hold too.
+        record_hold = False
         if route_session is None:
             return
         try:
@@ -582,8 +629,6 @@ def main() -> None:
             storage.mark_error(exc)
             logger.warning("Route summary could not be written: %s", exc)
         route_session = None
-        route_video_disabled = False
-        route_raw_disabled = False
         _refresh_storage_active_paths()
         storage.retain()
         current_sasc_scene_type = ""
@@ -865,7 +910,11 @@ def main() -> None:
                     except OSError as exc:
                         storage.mark_error(exc)
                         _finalize_route("STORAGE_ERROR")
-                    if route_session is not None and (script_runner is None or not script_runner.is_running()):
+                    if (
+                        route_session is not None
+                        and not record_hold
+                        and (script_runner is None or not script_runner.is_running())
+                    ):
                         _finalize_route("COMPLETED")
 
             # Build dashboard telemetry, merging calibrator output with hardware state

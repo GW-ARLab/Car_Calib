@@ -73,6 +73,14 @@ class RouteSession:
         """Attach extra metadata to be persisted in the route summary."""
         self._extra_meta[key] = value
 
+    def append_meta(self, key: str, value: object) -> None:
+        """Append ``value`` to a list-valued metadata entry, creating it if needed."""
+        entries = self._extra_meta.get(key)
+        if not isinstance(entries, list):
+            entries = []
+            self._extra_meta[key] = entries
+        entries.append(value)
+
     def start(self, mono_now: float) -> None:
         self._start_monotonic = mono_now
 
@@ -362,6 +370,11 @@ def compute_average_speed_mps() -> dict:
             try:
                 s = json.loads(summary_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
+                continue
+            # A dashboard record hold keeps the route open while the car may
+            # sit idle or be driven by hand, so its elapsed time says nothing
+            # about script cruise speed.
+            if (s.get("extra_meta") or {}).get("record_hold"):
                 continue
             dist = s.get("distance_m")
             elapsed = s.get("total_elapsed_seconds")

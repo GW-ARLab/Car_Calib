@@ -10,6 +10,8 @@ Serves:
   /api/power/<state>    → power ON/OFF
   /api/camera/list      → GET  scan available /dev/videoN indices
   /api/camera/select    → POST {"index": N} switch active camera
+  /route/record/start   → POST hold a route recording open (with or without a script)
+  /route/record/stop    → POST release the hold; the route finalizes once no script runs
   /routes/<id>/distance → POST {"distance_m": N} save manually-entered distance
   /routes/export.xlsx   → GET  ?ids=a,b,c (or all routes) as one .xlsx, 1 sheet per route
   /routes/avg_speed     → GET  {"avg_speed_mps": float|null, "n_samples": int}
@@ -151,7 +153,11 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def _script_status(self) -> dict[str, Any]:
         runner = getattr(self.server, "script_runner", None)
         status = runner() if callable(runner) else {"running": False, "steps": [], "current": None}
-        return {"status": status}
+        return {"status": status, "record": self._record_status()}
+
+    def _record_status(self) -> dict[str, Any]:
+        getter = getattr(self.server, "record_status_getter", None)
+        return getter() if callable(getter) else {"active": False, "route_id": None}
 
     def _file(self, path: Path) -> None:
         if not path.is_file():
@@ -428,6 +434,17 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 stopper()
             self._json({"ok": True})
             return
+        if path in ("/route/record/start", "/route/record/stop"):
+            attr = "record_starter" if path.endswith("/start") else "record_stopper"
+            handler = getattr(self.server, attr, None)
+            if not callable(handler):
+                self._json({"detail": "route recording unavailable"}, 404)
+                return
+            try:
+                self._json({"record": handler()})
+            except ValueError as exc:
+                self._json({"detail": str(exc)}, 400)
+            return
         if path == "/route/relay":
             on = (self._query().get("on") or ["0"])[0] == "1"
             handler = getattr(self.server, "relay_handler", None)
@@ -633,6 +650,9 @@ class Pi5HttpServer:
         self._script_runner: Callable[[], dict[str, Any]] | None = None
         self._script_stopper: Callable[[], None] | None = None
         self._script_submitter: Callable[[str], None] | None = None
+        self._record_starter: Callable[[], dict[str, Any]] | None = None
+        self._record_stopper: Callable[[], dict[str, Any]] | None = None
+        self._record_status_getter: Callable[[], dict[str, Any]] | None = None
         self._steps_getter: Callable[[], list[dict[str, Any]]] | None = None
         self._steps_setter: Callable[[str], None] | None = None
         self._presets_getter: Callable[[], list[dict[str, Any]]] | None = None
@@ -692,6 +712,17 @@ class Pi5HttpServer:
 
     def set_script_submitter(self, fn: Callable[[str], None]) -> None:
         self._script_submitter = fn
+
+    def set_record_handlers(
+        self,
+        *,
+        starter: Callable[[], dict[str, Any]],
+        stopper: Callable[[], dict[str, Any]],
+        status_getter: Callable[[], dict[str, Any]],
+    ) -> None:
+        self._record_starter = starter
+        self._record_stopper = stopper
+        self._record_status_getter = status_getter
 
     def set_steps_getter(self, fn: Callable[[], list[dict[str, Any]]]) -> None:
         self._steps_getter = fn
@@ -776,6 +807,9 @@ class Pi5HttpServer:
         self._server.script_runner = self._script_runner
         self._server.script_stopper = self._script_stopper
         self._server.script_submitter = self._script_submitter
+        self._server.record_starter = self._record_starter
+        self._server.record_stopper = self._record_stopper
+        self._server.record_status_getter = self._record_status_getter
         self._server.steps_getter = self._steps_getter
         self._server.steps_setter = self._steps_setter
         self._server.presets_getter = self._presets_getter

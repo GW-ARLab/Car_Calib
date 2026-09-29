@@ -43,6 +43,7 @@ const manualPill = document.getElementById("manualPill");
 const manualDetail = document.getElementById("manualDetail");
 let currentRunningStep = 0;
 let isRunning = false;
+let isRecording = false;
 let editingIndex = -1;
 let manualActive = false;
 let manualPointerId = null;
@@ -183,7 +184,38 @@ async function playSingleStep(idx) {
   }
 }
 
-document.getElementById("run").onclick = async () => {
+const runBtn = document.getElementById("run");
+const recordBtn = document.getElementById("record");
+
+// Both buttons toggle: start while idle, stop while active. State comes from
+// /route/script/status polling (see pollStatus), plus an optimistic flip on
+// a successful click so the label changes without waiting for the next poll.
+function renderRunButtons() {
+  runBtn.textContent = isRunning ? "■ dừng route" : "▶ bắt đầu route";
+  runBtn.className = isRunning ? "danger" : "primary";
+  recordBtn.textContent = isRecording ? "■ dừng record" : "● bắt đầu record";
+  recordBtn.className = isRecording ? "danger" : "primary";
+}
+
+function applyRecordState(rec) {
+  const wasRecording = isRecording;
+  isRecording = !!(rec && rec.active);
+  renderRunButtons();
+  if (wasRecording && !isRecording) {
+    setTimeout(refreshRoutes, 800);
+  }
+}
+
+runBtn.onclick = async () => {
+  if (isRunning) {
+    try {
+      await fetch("/route/script/stop" + qp, {method: "POST"});
+      runDetail.textContent = "stopping…";
+    } catch (e) {
+      runDetail.textContent = "stop network error";
+    }
+    return;
+  }
   if (editingIndex >= 0) { runDetail.textContent = "save edit first"; return; }
   if (steps.length === 0) { runDetail.textContent = "add steps first"; return; }
   runDetail.textContent = "submitting…";
@@ -195,10 +227,21 @@ document.getElementById("run").onclick = async () => {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { runDetail.textContent = "error: " + JSON.stringify(j.detail || r.status); return; }
   runDetail.textContent = "";
+  isRunning = true;
+  renderRunButtons();
+  render();
 };
-document.getElementById("stop").onclick = async () => {
-  await fetch("/route/script/stop" + qp, {method: "POST"});
-  runDetail.textContent = "stopping…";
+
+recordBtn.onclick = async () => {
+  const path = isRecording ? "/route/record/stop" : "/route/record/start";
+  try {
+    const r = await fetch(path + qp, {method: "POST"});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { runDetail.textContent = "record error: " + (j.detail || r.status); return; }
+    applyRecordState(j.record);
+  } catch (e) {
+    runDetail.textContent = "record network error";
+  }
 };
 
 async function setLight(on) {
@@ -674,6 +717,7 @@ async function pollStatus() {
       const st = j.status || {};
       const wasRunning = isRunning;
       isRunning = !!st.running;
+      applyRecordState(j.record);
       currentRunningStep = st.current_step || 0;
       if (st.running) {
         const total = st.total || 0;
@@ -700,7 +744,8 @@ async function pollStatus() {
         progressBar.style.width = "0%";
         renderProgressSegments(0, 0, 0);
       } else {
-        setPill("pill-idle", "idle");
+        if (isRecording) setPill("pill-running", "recording");
+        else setPill("pill-idle", "idle");
         if (wasRunning) runDetail.textContent = "finished";
         progressBar.style.width = "0%";
         renderProgressSegments(0, 0, 0);
