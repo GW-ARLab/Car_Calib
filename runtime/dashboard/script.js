@@ -1202,6 +1202,11 @@ let tuneState = null;
 let tuneDraft = {};
 let tuneTouched = false;
 let tuneEditing = false;
+let tuneRenderedSchema = "";
+
+function tuneSchemaSig(schema) {
+  return (schema || []).map(s => s.key).join(",");
+}
 
 function tuneSame(a, b, schema) {
   if (!a || !b || !schema) return false;
@@ -1258,6 +1263,7 @@ function renderTuneFields() {
     });
   });
   tuneFields.innerHTML = html;
+  tuneRenderedSchema = tuneSchemaSig(tuneState.schema);
   renderTuneStatus();
 }
 
@@ -1275,7 +1281,10 @@ async function refreshTune(forceRender) {
     }
     const data = await r.json();
     tuneState = data;
-    const shouldRenderFields = forceRender || !tuneFields.hasChildNodes();
+    // Re-render when the server's param list changes (e.g. after a redeploy
+    // while this tab stayed open), not only on first load.
+    const shouldRenderFields = forceRender || !tuneFields.hasChildNodes()
+      || tuneSchemaSig(data.schema) !== tuneRenderedSchema;
     if (shouldRenderFields && !tuneEditing && !tuneInputFocused()) {
       tuneDraft = Object.assign({}, data.values || {});
       tuneTouched = false;
