@@ -7,7 +7,7 @@ entrypoints. A frame is processed once by the shared vision path.
 
 - `ConfigManager`: reads grouped runtime settings.
 - `VisionProcessor`: performs ROI, grayscale, blur, Canny, Hough extraction,
-  and current opposite-sign pair selection.
+  and current horizon-voted pair selection.
 - `GeometryCalculator`: calculates line intersection, bottom intercepts, and a
   linear vanishing-point angle.
 - `SteeringController`: applies danger overrides, hysteresis, and current PD
@@ -89,10 +89,11 @@ specific `runtime_output` process such as `render_visuals`, `write_telemetry`,
 
 ## Current Pair Selection
 
-The current filter rejects vertical and near-horizontal candidates, then
-selects the longest negative-slope and positive-slope segments. The approved
-next refinement will select the most opposite valid slopes and add explicit
-geometry rejection reasons.
+The filter keeps longitudinal candidates, votes each at the lane-convergence
+row (`VISION_VP_HORIZON_Y`), keeps the dominant family, and selects the nearest
+lane group left and right of the image centre (slope sign is not used). See
+`docs/vision.md`. Explicit geometry rejection reasons remain a later
+refinement.
 
 ## Immediate Danger Override
 

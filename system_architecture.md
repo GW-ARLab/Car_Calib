@@ -6,7 +6,7 @@
 live camera or offline video frame
   -> UnifiedCalibrator.process_frame(frame, frame_num)
   -> VisionProcessor preprocessing and Hough extraction
-  -> opposite-slope pair selection
+  -> horizon-voted lane pair selection
   -> GeometryCalculator
   -> SteeringController
   -> CalibrationResult
@@ -39,11 +39,10 @@ that applies the current telemetry and visualization side effects.
 
 `VisionProcessor` crops the top `ROI_HEIGHT_PCT` of the frame, converts it to
 grayscale, blurs it, runs Canny, and extracts probabilistic Hough segments.
-The current geometric filter rejects vertical and near-horizontal lines and
-selects the longest line from each slope sign.
-
-The approved next geometry behavior is to select the most opposite valid
-slopes. It will be implemented and tested in its own approved gate.
+The geometric filter keeps longitudinal lines, votes each at the
+lane-convergence row (`VISION_VP_HORIZON_Y`), keeps the dominant family, and
+selects the nearest lane group on each side of the image centre. See
+`docs/vision.md`.
 
 `GeometryCalculator` projects selected lines to the frame bottom, calculates
 their infinite-line intersection, and maps vanishing-point x to a linear

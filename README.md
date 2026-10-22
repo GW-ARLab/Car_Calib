@@ -13,8 +13,10 @@ single calibration computation path:
 1. Crop the configured top portion of the BGR camera frame.
 2. Convert the ROI to grayscale, apply Gaussian blur, and run Canny.
 3. Extract line segments with probabilistic Hough transform.
-4. Exclude vertical and near-horizontal segments, then select the longest
-   negative-slope and positive-slope segments.
+4. Keep longitudinal segments, let each vote at the lane-convergence row
+   (`VISION_VP_HORIZON_Y`), keep the dominant family, and pick the nearest
+   lane group left and right of the image centre (slope sign is not used;
+   see [Vision](docs/vision.md)).
 5. Project both lines to the bottom of the frame and calculate their
    intersection as the vanishing point.
 6. Map the vanishing-point x-coordinate linearly into an angle centered at
@@ -22,10 +24,8 @@ single calibration computation path:
 7. Apply danger-zone overrides, tracking hysteresis, and a PD steering
    correction.
 
-The approved next geometry refinement is to select the most opposite valid
-negative and positive slopes rather than the longest pair. That behavior is
-documented here but intentionally not implemented in this removal and
-centralization phase.
+For day-to-day operation (dashboard, recording, tuning, deploy), see the
+[User Guide](docs/user_guide.md) (Vietnamese).
 
 Current steering states are:
 
